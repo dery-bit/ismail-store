@@ -1382,7 +1382,7 @@
 
         <div>
           <label class="block text-gray-400 mb-1">Pilih Produk (Tersedia di Stok) *</label>
-          <select id="sale-produk-select" onchange="calculateSaleTotal()" required class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-white focus:outline-none focus:border-yellow-500">
+          <select id="sale-produk-select" onchange="const _item=stockData.find(i=>String(i.id)===String(this.value)); applySaleStockSpec(_item); calculateSaleTotal();" required class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-white focus:outline-none focus:border-yellow-500">
             <option value="">-- Pilih Produk --</option>
           </select>
         </div>
@@ -3179,7 +3179,12 @@
       const select = document.getElementById('sale-produk-select');
       const title = document.getElementById('penjualan-modal-title');
       
-      const tersediaList = stockData.filter(i => i.status === 'Tersedia' && i.jumlah > 0);
+      const editingSale = editId ? salesData.find(x => x.id == editId) : null;
+      const editingStockId = editingSale ? editingSale.stockId : null;
+      const tersediaList = stockData.filter(i =>
+        (i.status === 'Tersedia' && Number(i.jumlah) > 0) ||
+        (editingStockId != null && i.id == editingStockId)
+      );
       
       let optionsHtml = '<option value="">-- Pilih Produk --</option>';
       optionsHtml += tersediaList.map(item => {
@@ -3190,6 +3195,7 @@
       
       select.innerHTML = optionsHtml;
       document.getElementById('penjualan-form').reset();
+      setSaleSpecFieldsLocked(false);
       const settingMetode=getPengaturan().metodeDefault;
       const saleMetode=document.getElementById('sale-metode');
       if(saleMetode) saleMetode.value=settingMetode||'';
@@ -3207,6 +3213,10 @@
           document.getElementById('sale-qty').value = s.qty || 1;
           document.getElementById('sale-harga-jual-custom').value = formatRupiahInput(s.hargaJual);
           document.getElementById('sale-potongan-custom').value = formatRupiahInput(s.potongan || 0);
+          if (s.stockId != null) {
+            select.value = String(s.stockId);
+            calculateSaleTotal();
+          }
         }
       } else {
         title.innerText = "🛍️ Catat Penjualan Baru";
@@ -3237,9 +3247,7 @@
         if(item) {
           hargaBeli = typeof item.hargaBeli === 'number' ? item.hargaBeli : parseFloat(item.hargaBeli) || 0;
           
-          if(item.ram) document.getElementById('sale-ram').value = item.ram;
-          if(item.memory) document.getElementById('sale-memory').value = item.memory;
-          if(item.warna) document.getElementById('sale-warna').value = item.warna;
+          applySaleStockSpec(item);
 
           if(!rawHargaJualCustom && document.activeElement !== document.getElementById('sale-harga-jual-custom')) {
             let defaultJual = (typeof item.hargaJual === 'number' ? item.hargaJual : parseFloat(item.hargaJual) || 0);
@@ -3263,6 +3271,64 @@
         btnSubmit.disabled = false;
         warningBox.classList.add('hidden');
       }
+    }
+
+    // Spesifikasi penjualan selalu mengikuti BARIS STOK yang dipilih.
+    // Field tetap ditampilkan agar kasir bisa melihat detail barang, tetapi tidak boleh
+    // diubah menjadi varian lain yang belum terdaftar di stok.
+    function setSaleSpecFieldsLocked(locked) {
+      ['sale-ram', 'sale-memory', 'sale-warna'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.disabled = !!locked;
+        el.classList.toggle('opacity-70', !!locked);
+        el.title = locked ? 'Mengikuti spesifikasi stok yang dipilih dan tidak dapat diubah saat transaksi.' : '';
+      });
+    }
+
+    function applySaleStockSpec(item) {
+      const ram = document.getElementById('sale-ram');
+      const memory = document.getElementById('sale-memory');
+      const warna = document.getElementById('sale-warna');
+      if (!item) {
+        if (ram) ram.value = '';
+        if (memory) memory.value = '';
+        if (warna) warna.value = '';
+        setSaleSpecFieldsLocked(false);
+        return;
+      }
+      if (ram) ram.value = item.ram || '';
+      if (memory) memory.value = item.memory || '';
+      if (warna) warna.value = item.warna || '';
+      setSaleSpecFieldsLocked(true);
+    }
+
+    // Normalisasi spesifikasi hanya untuk perbandingan stok vs transaksi.
+    // Nilai yang berbeda pada produk/RAM/ROM/warna/varian dianggap barang berbeda.
+    function normalizeStockSpec(value) {
+      return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+    }
+
+    function validateSaleMatchesStock(itemStok, saleData) {
+      if (!itemStok) return ['Produk stok tidak ditemukan.'];
+
+      const checks = [
+        ['Merek/Produk', itemStok.produk, saleData.produk],
+        ['RAM', itemStok.ram, saleData.ram],
+        ['Penyimpanan (ROM)', itemStok.memory, saleData.memory],
+        ['Warna', itemStok.warna, saleData.warna],
+        ['Varian/Kategori', itemStok.varian, saleData.varian]
+      ];
+
+      const mismatches = [];
+      for (const [label, stockValue, saleValue] of checks) {
+        if (normalizeStockSpec(stockValue) !== normalizeStockSpec(saleValue)) {
+          mismatches.push(
+            `${label}: stok = "${stockValue || '-'}", transaksi = "${saleValue || '-'}"`
+          );
+        }
+      }
+      return mismatches;
     }
 
     function handlePenjualanSubmit(e) {
@@ -3327,6 +3393,26 @@
       let itemStok = itemId ? stockData.find(i => i.id == itemId) : null;
       let hargaBeli = itemStok ? (Number(itemStok.hargaBeli) || 0) : 0;
 
+      // Semua spesifikasi transaksi WAJIB sama dengan baris stok yang dipilih.
+      // Ini mencegah contoh: stok Samsung 4GB/32GB tetapi transaksi diubah menjadi 16GB/64GB.
+      if (itemStok) {
+        const saleVarianField = document.getElementById('sale-varian');
+        const saleVarian = saleVarianField ? saleVarianField.value : itemStok.varian;
+        const specMismatches = validateSaleMatchesStock(itemStok, {
+          produk: itemStok.produk,
+          ram: saleRam,
+          memory: saleMemory,
+          warna: saleWarna,
+          varian: saleVarian
+        });
+        if (specMismatches.length > 0) {
+          errors.push(
+            'Spesifikasi transaksi tidak sama dengan stok yang dipilih.',
+            ...specMismatches.map(x => `• ${x}`)
+          );
+        }
+      }
+
       if (itemId && !itemStok) {
         errors.push('Produk yang dipilih tidak ditemukan di data stok. Silakan pilih produk yang masih tersedia.');
       }
@@ -3360,6 +3446,25 @@
 
       if (itemStok && Number.isFinite(hargaJualBersih) && hargaJualBersih > 0 && hargaJualBersih < hargaBeli) {
         errors.push(`Harga jual bersih ${formatRupiah(hargaJualBersih)} lebih rendah dari harga modal ${formatRupiah(hargaBeli)}. Transaksi akan menyebabkan kerugian.`);
+      }
+
+      // Pemeriksaan akhir: transaksi HARUS menunjuk ke baris stok yang nyata dan
+      // spesifikasinya harus persis sama. Jangan pernah menerima varian yang hanya
+      // sama mereknya tetapi berbeda RAM/ROM/warna/kategori.
+      if (itemStok) {
+        const exactStockExists = stockData.some(i => {
+          if (String(i.id) !== String(itemStok.id)) return false;
+          return validateSaleMatchesStock(i, {
+            produk: itemStok.produk,
+            ram: saleRam,
+            memory: saleMemory,
+            warna: saleWarna,
+            varian: i.varian
+          }).length === 0;
+        });
+        if (!exactStockExists) {
+          errors.push('Varian yang dijual tidak sama persis dengan stok yang terdaftar. Silakan pilih stok yang benar.');
+        }
       }
 
       if (itemStok && Number.isFinite(hargaJualCustom) && hargaJualCustom > 0) {
@@ -3418,7 +3523,13 @@
           salesData[idx].potongan = potonganCustom;
           salesData[idx].qty = qty;
           salesData[idx].laba = (hargaJualBersih - salesData[idx].hargaBeli) * qty;
-          const customSpek = [saleMemory, saleRam, saleWarna].filter(Boolean).join('/') || '-';
+          salesData[idx].stockId = itemStok.id;
+          salesData[idx].produk = itemStok.produk;
+          salesData[idx].ram = itemStok.ram || '';
+          salesData[idx].memory = itemStok.memory || '';
+          salesData[idx].warna = itemStok.warna || '';
+          salesData[idx].varian = itemStok.varian || '';
+          const customSpek = [itemStok.memory, itemStok.ram, itemStok.warna].filter(Boolean).join('/') || '-';
           salesData[idx].spek = customSpek;
           syncPiutangFromSale(salesData[idx]);
         }
@@ -3434,6 +3545,10 @@
           id: salesData.length + 1,
           stockId: itemStok ? itemStok.id : null,
           produk: namaProduk,
+          ram: itemStok ? (itemStok.ram || '') : '',
+          memory: itemStok ? (itemStok.memory || '') : '',
+          warna: itemStok ? (itemStok.warna || '') : '',
+          varian: itemStok ? (itemStok.varian || '') : '',
           spek: spek,
           qty: qty,
           hargaBeli: hargaBeli,
@@ -3457,6 +3572,7 @@
         syncPiutangFromSale(newSale);
       }
 
+      setSaleSpecFieldsLocked(false);
       closeModal('modal-penjualan');
       populateDynamicPeriods(); // Perbarui opsi periode jika ada bulan baru yang ditambahkan
       renderSalesTable();
