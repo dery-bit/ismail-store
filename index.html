@@ -78,7 +78,7 @@
 
     <form id="online-db-auth-form" style="display:none">
       <label style="display:block;font-size:12px;color:#9ca3af;margin-bottom:6px">Email akun toko</label>
-      <input id="online-db-email" class="online-db-input" type="email" autocomplete="email" required placeholder="contoh: toko@gmail.com">
+      <input id="online-db-email" class="online-db-input" type="text" inputmode="email" autocomplete="email" required placeholder="contoh: toko@gmail.com">
       <label style="display:block;font-size:12px;color:#9ca3af;margin:14px 0 6px">Password</label>
       <input id="online-db-password" class="online-db-input" type="password" minlength="6" autocomplete="current-password" required placeholder="Minimal 6 karakter">
       <div id="online-db-msg" class="online-db-msg"></div>
@@ -4846,21 +4846,36 @@
 
   async function requestPasswordReset(){
     if(!db)return;
-    const email=ui('online-db-email').value.trim();
+    // Normalisasi email agar spasi/karakter tersembunyi dari autofill atau copy-paste tidak ikut terkirim.
+    const rawEmail=ui('online-db-email').value || '';
+    const email=rawEmail.replace(/[\u200B-\u200D\uFEFF]/g,'').trim().toLowerCase();
+    ui('online-db-email').value=email;
     if(!email){
       showMsg('Masukkan email akun toko terlebih dahulu.',false);
+      ui('online-db-email')?.focus();
+      return;
+    }
+    // Validasi ringan di aplikasi; jangan memakai validasi browser type=email karena bisa berbeda antar-browser.
+    const emailOk=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    if(!emailOk){
+      showMsg('Format email belum benar. Contoh: toko@gmail.com',false);
       ui('online-db-email')?.focus();
       return;
     }
     const btn=ui('online-db-forgot');
     if(btn)btn.disabled=true;
     try{
-      const redirectTo=window.location.origin+window.location.pathname;
+      const redirectTo='https://dery-bit.github.io/ismail-store/';
       const {error}=await db.auth.resetPasswordForEmail(email,{redirectTo});
       if(error)throw error;
       showMsg('Link reset password sudah dikirim ke email. Buka email tersebut lalu klik link reset.',true);
     }catch(err){
-      showMsg(err.message||'Gagal mengirim link reset password.',false);
+      const message=String(err?.message||'');
+      if(/email address .* is invalid/i.test(message)){
+        showMsg('Email sudah dinormalisasi tetapi Supabase masih menolaknya. Pastikan alamat ini memang akun yang terdaftar di Ismail Store.',false);
+      }else{
+        showMsg(message||'Gagal mengirim link reset password.',false);
+      }
     }finally{ if(btn)btn.disabled=false; }
   }
 
