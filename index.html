@@ -78,15 +78,25 @@
 
     <form id="online-db-auth-form" style="display:none">
       <label style="display:block;font-size:12px;color:#9ca3af;margin-bottom:6px">Email akun toko</label>
-      <input id="online-db-email" class="online-db-input" type="email" autocomplete="email" required placeholder="contoh: toko@gmail.com">
+      <input id="online-db-email" class="online-db-input" type="text" inputmode="email" autocomplete="email" required placeholder="contoh: toko@gmail.com">
       <label style="display:block;font-size:12px;color:#9ca3af;margin:14px 0 6px">Password</label>
       <input id="online-db-password" class="online-db-input" type="password" minlength="6" autocomplete="current-password" required placeholder="Minimal 6 karakter">
       <div id="online-db-msg" class="online-db-msg"></div>
       <button id="online-db-submit" class="online-db-btn" style="margin-top:14px" type="submit">🔐 Masuk</button>
+      <button id="online-db-forgot" class="online-db-btn secondary" style="margin-top:8px" type="button">🔑 Lupa password?</button>
       <button id="online-db-toggle" class="online-db-btn secondary" style="margin-top:8px" type="button">Buat akun baru</button>
       <p style="font-size:10px;color:#6b7280;text-align:center;margin:14px 0 0">
         Akun yang sama dapat dipakai di HP dan komputer lain. Data bisnis disimpan di database online.
       </p>
+    </form>
+
+    <form id="online-db-reset-form" style="display:none">
+      <label style="display:block;font-size:12px;color:#9ca3af;margin-bottom:6px">Password baru</label>
+      <input id="online-db-new-password" class="online-db-input" type="password" minlength="6" autocomplete="new-password" required placeholder="Minimal 6 karakter">
+      <label style="display:block;font-size:12px;color:#9ca3af;margin:14px 0 6px">Ulangi password baru</label>
+      <input id="online-db-new-password-2" class="online-db-input" type="password" minlength="6" autocomplete="new-password" required placeholder="Ulangi password baru">
+      <div id="online-db-reset-msg" class="online-db-msg"></div>
+      <button id="online-db-reset-submit" class="online-db-btn" style="margin-top:14px" type="submit">🔐 Simpan Password Baru</button>
     </form>
   </div>
 </div>
@@ -1382,7 +1392,7 @@
 
         <div>
           <label class="block text-gray-400 mb-1">Pilih Produk (Tersedia di Stok) *</label>
-          <select id="sale-produk-select" onchange="const _item=stockData.find(i=>String(i.id)===String(this.value)); applySaleStockSpec(_item); calculateSaleTotal();" required class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-white focus:outline-none focus:border-yellow-500">
+          <select id="sale-produk-select" onchange="calculateSaleTotal()" required class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-white focus:outline-none focus:border-yellow-500">
             <option value="">-- Pilih Produk --</option>
           </select>
         </div>
@@ -3179,12 +3189,7 @@
       const select = document.getElementById('sale-produk-select');
       const title = document.getElementById('penjualan-modal-title');
       
-      const editingSale = editId ? salesData.find(x => x.id == editId) : null;
-      const editingStockId = editingSale ? editingSale.stockId : null;
-      const tersediaList = stockData.filter(i =>
-        (i.status === 'Tersedia' && Number(i.jumlah) > 0) ||
-        (editingStockId != null && i.id == editingStockId)
-      );
+      const tersediaList = stockData.filter(i => i.status === 'Tersedia' && i.jumlah > 0);
       
       let optionsHtml = '<option value="">-- Pilih Produk --</option>';
       optionsHtml += tersediaList.map(item => {
@@ -3195,7 +3200,6 @@
       
       select.innerHTML = optionsHtml;
       document.getElementById('penjualan-form').reset();
-      setSaleSpecFieldsLocked(false);
       const settingMetode=getPengaturan().metodeDefault;
       const saleMetode=document.getElementById('sale-metode');
       if(saleMetode) saleMetode.value=settingMetode||'';
@@ -3213,10 +3217,6 @@
           document.getElementById('sale-qty').value = s.qty || 1;
           document.getElementById('sale-harga-jual-custom').value = formatRupiahInput(s.hargaJual);
           document.getElementById('sale-potongan-custom').value = formatRupiahInput(s.potongan || 0);
-          if (s.stockId != null) {
-            select.value = String(s.stockId);
-            calculateSaleTotal();
-          }
         }
       } else {
         title.innerText = "🛍️ Catat Penjualan Baru";
@@ -3247,7 +3247,9 @@
         if(item) {
           hargaBeli = typeof item.hargaBeli === 'number' ? item.hargaBeli : parseFloat(item.hargaBeli) || 0;
           
-          applySaleStockSpec(item);
+          if(item.ram) document.getElementById('sale-ram').value = item.ram;
+          if(item.memory) document.getElementById('sale-memory').value = item.memory;
+          if(item.warna) document.getElementById('sale-warna').value = item.warna;
 
           if(!rawHargaJualCustom && document.activeElement !== document.getElementById('sale-harga-jual-custom')) {
             let defaultJual = (typeof item.hargaJual === 'number' ? item.hargaJual : parseFloat(item.hargaJual) || 0);
@@ -3271,64 +3273,6 @@
         btnSubmit.disabled = false;
         warningBox.classList.add('hidden');
       }
-    }
-
-    // Spesifikasi penjualan selalu mengikuti BARIS STOK yang dipilih.
-    // Field tetap ditampilkan agar kasir bisa melihat detail barang, tetapi tidak boleh
-    // diubah menjadi varian lain yang belum terdaftar di stok.
-    function setSaleSpecFieldsLocked(locked) {
-      ['sale-ram', 'sale-memory', 'sale-warna'].forEach(id => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.disabled = !!locked;
-        el.classList.toggle('opacity-70', !!locked);
-        el.title = locked ? 'Mengikuti spesifikasi stok yang dipilih dan tidak dapat diubah saat transaksi.' : '';
-      });
-    }
-
-    function applySaleStockSpec(item) {
-      const ram = document.getElementById('sale-ram');
-      const memory = document.getElementById('sale-memory');
-      const warna = document.getElementById('sale-warna');
-      if (!item) {
-        if (ram) ram.value = '';
-        if (memory) memory.value = '';
-        if (warna) warna.value = '';
-        setSaleSpecFieldsLocked(false);
-        return;
-      }
-      if (ram) ram.value = item.ram || '';
-      if (memory) memory.value = item.memory || '';
-      if (warna) warna.value = item.warna || '';
-      setSaleSpecFieldsLocked(true);
-    }
-
-    // Normalisasi spesifikasi hanya untuk perbandingan stok vs transaksi.
-    // Nilai yang berbeda pada produk/RAM/ROM/warna/varian dianggap barang berbeda.
-    function normalizeStockSpec(value) {
-      return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-    }
-
-    function validateSaleMatchesStock(itemStok, saleData) {
-      if (!itemStok) return ['Produk stok tidak ditemukan.'];
-
-      const checks = [
-        ['Merek/Produk', itemStok.produk, saleData.produk],
-        ['RAM', itemStok.ram, saleData.ram],
-        ['Penyimpanan (ROM)', itemStok.memory, saleData.memory],
-        ['Warna', itemStok.warna, saleData.warna],
-        ['Varian/Kategori', itemStok.varian, saleData.varian]
-      ];
-
-      const mismatches = [];
-      for (const [label, stockValue, saleValue] of checks) {
-        if (normalizeStockSpec(stockValue) !== normalizeStockSpec(saleValue)) {
-          mismatches.push(
-            `${label}: stok = "${stockValue || '-'}", transaksi = "${saleValue || '-'}"`
-          );
-        }
-      }
-      return mismatches;
     }
 
     function handlePenjualanSubmit(e) {
@@ -3393,26 +3337,6 @@
       let itemStok = itemId ? stockData.find(i => i.id == itemId) : null;
       let hargaBeli = itemStok ? (Number(itemStok.hargaBeli) || 0) : 0;
 
-      // Semua spesifikasi transaksi WAJIB sama dengan baris stok yang dipilih.
-      // Ini mencegah contoh: stok Samsung 4GB/32GB tetapi transaksi diubah menjadi 16GB/64GB.
-      if (itemStok) {
-        const saleVarianField = document.getElementById('sale-varian');
-        const saleVarian = saleVarianField ? saleVarianField.value : itemStok.varian;
-        const specMismatches = validateSaleMatchesStock(itemStok, {
-          produk: itemStok.produk,
-          ram: saleRam,
-          memory: saleMemory,
-          warna: saleWarna,
-          varian: saleVarian
-        });
-        if (specMismatches.length > 0) {
-          errors.push(
-            'Spesifikasi transaksi tidak sama dengan stok yang dipilih.',
-            ...specMismatches.map(x => `• ${x}`)
-          );
-        }
-      }
-
       if (itemId && !itemStok) {
         errors.push('Produk yang dipilih tidak ditemukan di data stok. Silakan pilih produk yang masih tersedia.');
       }
@@ -3446,25 +3370,6 @@
 
       if (itemStok && Number.isFinite(hargaJualBersih) && hargaJualBersih > 0 && hargaJualBersih < hargaBeli) {
         errors.push(`Harga jual bersih ${formatRupiah(hargaJualBersih)} lebih rendah dari harga modal ${formatRupiah(hargaBeli)}. Transaksi akan menyebabkan kerugian.`);
-      }
-
-      // Pemeriksaan akhir: transaksi HARUS menunjuk ke baris stok yang nyata dan
-      // spesifikasinya harus persis sama. Jangan pernah menerima varian yang hanya
-      // sama mereknya tetapi berbeda RAM/ROM/warna/kategori.
-      if (itemStok) {
-        const exactStockExists = stockData.some(i => {
-          if (String(i.id) !== String(itemStok.id)) return false;
-          return validateSaleMatchesStock(i, {
-            produk: itemStok.produk,
-            ram: saleRam,
-            memory: saleMemory,
-            warna: saleWarna,
-            varian: i.varian
-          }).length === 0;
-        });
-        if (!exactStockExists) {
-          errors.push('Varian yang dijual tidak sama persis dengan stok yang terdaftar. Silakan pilih stok yang benar.');
-        }
       }
 
       if (itemStok && Number.isFinite(hargaJualCustom) && hargaJualCustom > 0) {
@@ -3523,13 +3428,7 @@
           salesData[idx].potongan = potonganCustom;
           salesData[idx].qty = qty;
           salesData[idx].laba = (hargaJualBersih - salesData[idx].hargaBeli) * qty;
-          salesData[idx].stockId = itemStok.id;
-          salesData[idx].produk = itemStok.produk;
-          salesData[idx].ram = itemStok.ram || '';
-          salesData[idx].memory = itemStok.memory || '';
-          salesData[idx].warna = itemStok.warna || '';
-          salesData[idx].varian = itemStok.varian || '';
-          const customSpek = [itemStok.memory, itemStok.ram, itemStok.warna].filter(Boolean).join('/') || '-';
+          const customSpek = [saleMemory, saleRam, saleWarna].filter(Boolean).join('/') || '-';
           salesData[idx].spek = customSpek;
           syncPiutangFromSale(salesData[idx]);
         }
@@ -3545,10 +3444,6 @@
           id: salesData.length + 1,
           stockId: itemStok ? itemStok.id : null,
           produk: namaProduk,
-          ram: itemStok ? (itemStok.ram || '') : '',
-          memory: itemStok ? (itemStok.memory || '') : '',
-          warna: itemStok ? (itemStok.warna || '') : '',
-          varian: itemStok ? (itemStok.varian || '') : '',
           spek: spek,
           qty: qty,
           hargaBeli: hargaBeli,
@@ -3572,7 +3467,6 @@
         syncPiutangFromSale(newSale);
       }
 
-      setSaleSpecFieldsLocked(false);
       closeModal('modal-penjualan');
       populateDynamicPeriods(); // Perbarui opsi periode jika ada bulan baru yang ditambahkan
       renderSalesTable();
@@ -4603,12 +4497,6 @@
     namaUsaha:'',noWa:'',alamat:'',admin:'',mataUang:'',metodeDefault:'',
     stokMin:'',footerStruk:'',konfirmasiHapus:false,peringatanHarga:false,compact:false,animasi:false
   };
-  let stateRevision = 0;
-  let stateUpdatedAt = '';
-  let stateChannel = null;
-  let stateSyncStarted = false;
-  let stateWriteQueue = Promise.resolve();
-  let applyingRemoteState = false;
 
   const cfg = window.ISMAIL_SUPABASE_CONFIG || {};
   const configReady = !!(cfg.url && cfg.publishableKey && !String(cfg.url).includes('GANTI_'));
@@ -4617,117 +4505,399 @@
   function ui(id){return document.getElementById(id);}
   function showScreen(){ui('online-db-screen')?.classList.remove('hidden');document.body.classList.add('online-db-locked');}
   function hideScreen(){ui('online-db-screen')?.classList.add('hidden');document.body.classList.remove('online-db-locked');}
-  function showMsg(message, ok){const el=ui('online-db-msg');if(!el)return;el.textContent=message;el.className='online-db-msg '+(ok?'ok':'error');el.style.display='block';}
-  function setAuthMode(mode){authMode=mode;const title=ui('online-db-title'),submit=ui('online-db-submit'),toggle=ui('online-db-toggle'),msg=ui('online-db-msg');if(title)title.textContent=mode==='login'?'Masuk ke database toko':'Buat akun database toko';if(submit)submit.textContent=mode==='login'?'🔐 Masuk':'➕ Buat akun';if(toggle)toggle.textContent=mode==='login'?'Buat akun baru':'Sudah punya akun? Masuk';if(msg){msg.textContent='';msg.style.display='none';}}
-  function showConfig(){showScreen();const a=ui('online-db-config'),b=ui('online-db-auth-form'),t=ui('online-db-title');if(a)a.style.display='block';if(b)b.style.display='none';if(t)t.textContent='Konfigurasi database';}
-  function showAuth(){showScreen();const a=ui('online-db-config'),b=ui('online-db-auth-form');if(a)a.style.display='none';if(b)b.style.display='block';setAuthMode('login');}
-  function showUserBar(){const b=ui('online-db-userbar');if(!b)return;b.classList.add('show');const e=ui('online-db-user-email');if(e)e.textContent=currentUser?.email||'Akun toko';}
+  function showMsg(message, ok){
+    const el=ui('online-db-msg'); if(!el)return;
+    el.textContent=message; el.className='online-db-msg '+(ok?'ok':'error'); el.style.display='block';
+  }
+  function setAuthMode(mode){
+    authMode=mode;
+    const title=ui('online-db-title');
+    const submit=ui('online-db-submit');
+    const toggle=ui('online-db-toggle');
+    const msg=ui('online-db-msg');
+    if(title) title.textContent=mode==='login'?'Masuk ke database toko':'Buat akun database toko';
+    if(submit) submit.textContent=mode==='login'?'🔐 Masuk':'➕ Buat akun';
+    if(toggle) toggle.textContent=mode==='login'?'Buat akun baru':'Sudah punya akun? Masuk';
+    if(msg){ msg.textContent=''; msg.style.display='none'; }
+  }
+  function showConfig(){
+    showScreen();
+    ui('online-db-config').style.display='block';
+    ui('online-db-auth-form').style.display='none';
+    ui('online-db-title').textContent='Konfigurasi database';
+  }
+  function showAuth(){
+    showScreen();
+    ui('online-db-config').style.display='none';
+    ui('online-db-auth-form').style.display='block';
+    setAuthMode('login');
+  }
+  function showUserBar(){
+    const b=ui('online-db-userbar'); if(!b)return;
+    b.classList.add('show');
+    ui('online-db-user-email').textContent=currentUser?.email||'Akun toko';
+  }
   function hideUserBar(){ui('online-db-userbar')?.classList.remove('show');}
 
   async function initClient(){
     if(!configReady){showConfig();return false;}
-    if(!window.supabase || typeof window.supabase.createClient!=='function'){showScreen();showMsg('Library Supabase gagal dimuat. Periksa koneksi internet.',false);return false;}
-    db=window.supabase.createClient(cfg.url,cfg.publishableKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});return true;
-  }
-
-  function getLocalState(){
-    const state={};
-    for(const key of ARRAY_KEYS){try{state[key]=JSON.parse(JSON.stringify(getAppVar(key)||[]));}catch(e){state[key]=[];}}
-    state.settings=JSON.parse(JSON.stringify(onlineSettings||{}));
-    return state;
-  }
-  function applyLocalState(state){
-    applyingRemoteState=true;loadingRemote=true;
-    try{
-      for(const key of ARRAY_KEYS)setAppVar(key,Array.isArray(state?.[key])?state[key]:[]);
-      if(state?.settings && typeof state.settings==='object')onlineSettings={...state.settings};
-    }finally{loadingRemote=false;applyingRemoteState=false;}
+    if(!window.supabase || typeof window.supabase.createClient!=='function'){
+      showScreen(); showMsg('Library Supabase gagal dimuat. Periksa koneksi internet.',false); return false;
+    }
+    db=window.supabase.createClient(cfg.url,cfg.publishableKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+    return true;
   }
 
   function deepProxy(value,key){
-    if(!value||typeof value!=='object')return value;
+    if(!value || typeof value!=='object')return value;
     if(proxiedObjects.has(value))return proxiedObjects.get(value);
-    const proxy=new Proxy(value,{get(target,prop,receiver){const v=Reflect.get(target,prop,receiver);return(v&&typeof v==='object')?deepProxy(v,key):v;},set(target,prop,val,receiver){const ok=Reflect.set(target,prop,val,receiver);if(ok&&onlineReady&&!loadingRemote&&!applyingRemoteState)scheduleStateSave();return ok;},deleteProperty(target,prop){const ok=Reflect.deleteProperty(target,prop);if(ok&&onlineReady&&!loadingRemote&&!applyingRemoteState)scheduleStateSave();return ok;}});
-    proxiedObjects.set(value,proxy);return proxy;
-  }
-  function ensureProxies(){if(!onlineReady||loadingRemote||applyingRemoteState)return;for(const key of ARRAY_KEYS){try{const current=getAppVar(key);if(!Array.isArray(current))setAppVar(key,[]);const p=deepProxy(getAppVar(key),key);if(p!==getAppVar(key))setAppVar(key,p);}catch(e){}}}
-
-  async function readCanonicalState(){
-    const {data,error}=await db.from('store_state').select('state,revision,updated_at').eq('user_id',currentUser.id).maybeSingle();
-    if(error)throw error;
-    if(!data){
-      const initial=getLocalState();
-      const {data:created,error:ce}=await db.from('store_state').insert({user_id:currentUser.id,state:initial,revision:0}).select('state,revision,updated_at').single();
-      if(ce)throw ce;
-      stateRevision=created.revision||0;stateUpdatedAt=created.updated_at||'';return created.state||initial;
-    }
-    stateRevision=Number(data.revision)||0;stateUpdatedAt=data.updated_at||'';return data.state||{};
-  }
-
-  async function writeCanonicalState(reason='auto'){
-    if(!onlineReady||!currentUser||loadingRemote||applyingRemoteState)return;
-    const snapshot=getLocalState();
-    stateWriteQueue=stateWriteQueue.then(async()=>{
-      if(!onlineReady||!currentUser||loadingRemote||applyingRemoteState)return;
-      const {data,error}=await db.rpc('save_store_state',{p_state:snapshot,p_expected_revision:stateRevision});
-      if(error){
-        if(String(error.message||'').includes('STATE_CONFLICT')){
-          const latest=await readCanonicalState();
-          applyLocalState(latest);ensureProxies();rerenderAfterState();
-          throw new Error('Data berubah di perangkat lain. Data terbaru sudah dimuat agar tidak terjadi selisih. Silakan ulangi tindakan terakhir.');
-        }
-        throw error;
+    const proxy=new Proxy(value,{
+      get(target,prop,receiver){
+        const v=Reflect.get(target,prop,receiver);
+        return (v && typeof v==='object') ? deepProxy(v,key) : v;
+      },
+      set(target,prop,val,receiver){
+        const ok=Reflect.set(target,prop,val,receiver);
+        if(ok && onlineReady && !loadingRemote) scheduleSave(key);
+        return ok;
+      },
+      deleteProperty(target,prop){
+        const ok=Reflect.deleteProperty(target,prop);
+        if(ok && onlineReady && !loadingRemote) scheduleSave(key);
+        return ok;
       }
-      if(data && data.state){stateRevision=Number(data.revision)||stateRevision;stateUpdatedAt=data.updated_at||stateUpdatedAt;}
-    }).catch(err=>{console.error('State sync:',reason,err);showSyncWarning(err.message||String(err));});
-    return stateWriteQueue;
+    });
+    proxiedObjects.set(value,proxy);
+    return proxy;
   }
-  function scheduleStateSave(){clearTimeout(saveTimers.__state);saveTimers.__state=setTimeout(()=>writeCanonicalState('change'),450);}
-  function rerenderAfterState(){try{if(typeof syncCustomersFromSales==='function')syncCustomersFromSales();if(typeof syncPedagangFromStock==='function')syncPedagangFromStock();if(typeof populateCustomerSelect==='function')populateCustomerSelect();if(typeof populateDynamicPeriods==='function')populateDynamicPeriods();if(typeof updateMetricsAndRender==='function')updateMetricsAndRender();if(typeof renderDashboard==='function')renderDashboard();if(typeof renderPiutang==='function')renderPiutang();if(typeof renderTutupBuku==='function')renderTutupBuku();if(typeof loadPengaturan==='function')loadPengaturan();if(typeof syncMasterProdukFromStock==='function')syncMasterProdukFromStock();if(typeof renderMasterProduk==='function')renderMasterProduk();}catch(e){console.warn('Render sync:',e);}}
-  function showSyncWarning(msg){let el=ui('online-sync-warning');if(!el){el=document.createElement('div');el.id='online-sync-warning';el.style.cssText='position:fixed;left:12px;bottom:12px;z-index:99999;max-width:420px;background:#3f1d1d;border:1px solid #7f1d1d;color:#fecaca;padding:10px 12px;border-radius:10px;font:12px Arial;box-shadow:0 10px 30px rgba(0,0,0,.35)';document.body.appendChild(el);}el.textContent='⚠️ Sinkronisasi: '+msg;el.style.display='block';clearTimeout(window.__syncWarnTimer);window.__syncWarnTimer=setTimeout(()=>{el.style.display='none';},7000);}
 
-  async function saveAllOnline(){return writeCanonicalState('manual');}
+  function ensureProxies(){
+    if(!onlineReady || loadingRemote)return;
+    for(const key of ARRAY_KEYS){
+      try{
+        if(!Array.isArray(getAppVar(key))) setAppVar(key,[]);
+        const current=getAppVar(key); const p=deepProxy(current,key);
+        if(p!==current){
+          setAppVar(key,p);
+          scheduleSave(key);
+        }
+      }catch(e){}
+    }
+  }
 
-  async function loadRemoteData(){
+  async function writeRow(key,data){
+    if(!db || !currentUser || !onlineReady)return;
+    const payload={user_id:currentUser.id,data_key:key,data,updated_at:new Date().toISOString()};
+    const {error}=await db.from('app_data').upsert(payload,{onConflict:'user_id,data_key'});
+    if(error){ console.error('Supabase save',key,error); throw error; }
+    return true;
+  }
+
+  function scheduleSave(key){
+    if(!onlineReady || loadingRemote)return;
+    clearTimeout(saveTimers[key]);
+    saveTimers[key]=setTimeout(async()=>{
+      try{
+        const value=(key===SETTINGS_KEY)?onlineSettings:getAppVar(key);
+        await writeRow(key,JSON.parse(JSON.stringify(value)));
+      }catch(e){console.error('Online save failed',key,e);}
+    },650);
+  }
+
+  async function saveAllOnline(){
+    if(!onlineReady || !currentUser)return;
+    savingRemote=true;
+    try{
+      for(const key of ARRAY_KEYS){
+        await writeRow(key,JSON.parse(JSON.stringify(getAppVar(key)||[])));
+      }
+      await writeRow(SETTINGS_KEY,JSON.parse(JSON.stringify(onlineSettings)));
+    }finally{savingRemote=false;}
+  }
+
+  // Pengaman tambahan: aplikasi lama tidak selalu punya fungsi save khusus untuk
+  // setiap array. Pantau perubahan isi data secara berkala sehingga mutasi,
+  // unshift/push, atau penggantian seluruh array tetap dikirim ke Supabase.
+  function startCloudWatcher(){
+    if(cloudWatcherStarted)return;
+    cloudWatcherStarted=true;
+    // Ambil snapshot awal untuk SEMUA data aplikasi.
+    for(const key of ARRAY_KEYS){
+      try{cloudSnapshots[key]=JSON.stringify(getAppVar(key)||[]);}catch(e){cloudSnapshots[key]='[]';}
+    }
+    cloudSnapshots[SETTINGS_KEY]=JSON.stringify(onlineSettings||{});
+
+    // Satu mesin sinkronisasi untuk seluruh data. Ini menangkap perubahan
+    // walaupun kode aplikasi lama mengganti array secara langsung (assignment),
+    // bukan hanya push/splice pada array Proxy.
+    const flushCloudChanges=async(forceAll=false)=>{
+      if(!onlineReady || !currentUser || loadingRemote || savingRemote)return;
+      savingRemote=true;
+      try{
+        for(const key of ARRAY_KEYS){
+          try{
+            const value=JSON.parse(JSON.stringify(getAppVar(key)||[]));
+            const sig=JSON.stringify(value);
+            if(forceAll || sig!==cloudSnapshots[key]){
+              await writeRow(key,value);
+              cloudSnapshots[key]=sig;
+            }
+          }catch(e){console.error('Cloud sync',key,e);}
+        }
+        try{
+          const settings=JSON.parse(JSON.stringify(onlineSettings||{}));
+          const sig=JSON.stringify(settings);
+          if(forceAll || sig!==cloudSnapshots[SETTINGS_KEY]){
+            await writeRow(SETTINGS_KEY,settings);
+            cloudSnapshots[SETTINGS_KEY]=sig;
+          }
+        }catch(e){console.error('Cloud sync settings',e);}
+      }finally{savingRemote=false;}
+    };
+
+    window.__ismailFlushCloud=flushCloudChanges;
+    setInterval(()=>{flushCloudChanges(false);},1000);
+
+    // Saat tab ditinggalkan/minimize, lakukan flush terakhir. Browser tidak
+    // menjamin async request selesai sebelum unload, tetapi visibilitychange
+    // biasanya memberi waktu cukup ketika pengguna berpindah aplikasi/tab.
+    document.addEventListener('visibilitychange',()=>{
+      if(document.visibilityState==='hidden')flushCloudChanges(false);
+    });
+    window.addEventListener('beforeunload',()=>{flushCloudChanges(false);});
+
+    // Sinkronisasi penuh berkala sebagai pengaman tambahan.
+    setInterval(()=>{flushCloudChanges(true);},15000);
+  }
+
+  // ===== REALTIME SYNC =====
+  // Menjaga data aplikasi tetap sama di semua HP/browser yang login ke akun toko yang sama.
+  let realtimeChannel=null;
+  let applyingRealtime=false;
+  let realtimeStarted=false;
+
+  function rerenderAfterRealtime(key){
+    try{
+      if(key==='stockData'){
+        if(typeof syncPedagangFromStock==='function')syncPedagangFromStock();
+        if(typeof syncMasterProdukFromStock==='function')syncMasterProdukFromStock();
+        if(typeof renderMasterProduk==='function')renderMasterProduk();
+      }
+      if(key==='salesData'){
+        if(typeof syncCustomersFromSales==='function')syncCustomersFromSales();
+        if(typeof populateCustomerSelect==='function')populateCustomerSelect();
+      }
+      if(typeof updateMetricsAndRender==='function')updateMetricsAndRender();
+      if(typeof renderDashboard==='function')renderDashboard();
+      if(typeof renderPiutang==='function' && (key==='piutangData'||key==='piutangPaymentData'))renderPiutang();
+      if(typeof renderTutupBuku==='function' && key==='tutupBukuData')renderTutupBuku();
+      if(typeof loadPengaturan==='function' && key===SETTINGS_KEY)loadPengaturan();
+    }catch(e){ console.warn('Realtime render warning:',e); }
+  }
+
+  async function applyRealtimeRow(row){
+    if(!row || !row.data_key || row.user_id!==currentUser?.id)return;
+    const key=row.data_key;
+    if(!ARRAY_KEYS.includes(key) && key!==SETTINGS_KEY)return;
+    applyingRealtime=true;
     loadingRemote=true;
     try{
-      const state=await readCanonicalState();
-      applyLocalState(state);
-    }finally{loadingRemote=false;}
-  }
-
-  function startCloudWatcher(){
-    if(cloudWatcherStarted)return;cloudWatcherStarted=true;
-    setInterval(()=>{if(onlineReady&&!loadingRemote&&!applyingRemoteState)ensureProxies();},1000);
+      if(key===SETTINGS_KEY){
+        onlineSettings=(row.data && typeof row.data==='object')?{...row.data}:{};
+        cloudSnapshots[key]=JSON.stringify(onlineSettings);
+      }else{
+        const incoming=Array.isArray(row.data)?row.data:[];
+        setAppVar(key,incoming);
+        cloudSnapshots[key]=JSON.stringify(incoming);
+      }
+    }finally{
+      loadingRemote=false;
+      applyingRealtime=false;
+    }
+    rerenderAfterRealtime(key);
   }
 
   function startRealtimeSync(){
-    if(stateSyncStarted||!db||!currentUser)return;stateSyncStarted=true;
+    if(realtimeStarted || !db || !currentUser)return;
+    realtimeStarted=true;
     const uid=currentUser.id;
-    stateChannel=db.channel('ismail-store-state-'+uid).on('postgres_changes',{event:'UPDATE',schema:'public',table:'store_state',filter:'user_id=eq.'+uid},payload=>{
-      const row=payload.new;if(!row||row.user_id!==uid)return;
-      const rev=Number(row.revision)||0;
-      if(rev<=stateRevision)return;
-      stateRevision=rev;stateUpdatedAt=row.updated_at||stateUpdatedAt;
-      applyLocalState(row.state||{});ensureProxies();rerenderAfterState();
-    }).on('postgres_changes',{event:'INSERT',schema:'public',table:'store_state',filter:'user_id=eq.'+uid},payload=>{
-      const row=payload.new;if(!row||row.user_id!==uid)return;const rev=Number(row.revision)||0;if(rev<stateRevision)return;stateRevision=rev;stateUpdatedAt=row.updated_at||stateUpdatedAt;applyLocalState(row.state||{});ensureProxies();rerenderAfterState();
-    }).subscribe(status=>console.log('Ismail Store Realtime state:',status));
+    realtimeChannel=db.channel('ismail-store-realtime-'+uid)
+      .on('postgres_changes',{
+        event:'*',schema:'public',table:'app_data',filter:'user_id=eq.'+uid
+      }, async payload=>{
+        try{
+          // Ignore DELETE for unknown rows; normal app writes are INSERT/UPDATE.
+          if(payload.eventType==='DELETE'){
+            const old=payload.old||{};
+            if(old.data_key && ARRAY_KEYS.includes(old.data_key)){
+              applyingRealtime=true; loadingRemote=true;
+              try{ setAppVar(old.data_key,[]); cloudSnapshots[old.data_key]='[]'; }
+              finally{loadingRemote=false; applyingRealtime=false;}
+              rerenderAfterRealtime(old.data_key);
+            }
+            return;
+          }
+          await applyRealtimeRow(payload.new);
+        }catch(e){console.error('Realtime sync failed:',e);}
+      })
+      .subscribe(status=>{
+        console.log('Ismail Store Realtime:',status);
+      });
   }
-  function stopRealtimeSync(){if(stateChannel&&db){try{db.removeChannel(stateChannel);}catch(e){}}stateChannel=null;stateSyncStarted=false;}
 
-  // Override local-only settings/backup helpers so every change enters the canonical state.
-  window.getPengaturan=()=>({...onlineSettings});
-  window.isPengaturanTerisi=()=>{const x=window.getPengaturan();return !!(x.namaUsaha||x.noWa||x.alamat||x.admin||x.mataUang||x.metodeDefault||String(x.stokMin)!==''||x.footerStruk||x.konfirmasiHapus||x.peringatanHarga||x.compact||x.animasi);};
-  window.simpanPengaturan=async function(){const el=id=>document.getElementById(id);onlineSettings={namaUsaha:el('set-nama-usaha')?.value.trim()||'',noWa:el('set-no-wa')?.value.trim()||'',alamat:el('set-alamat')?.value.trim()||'',admin:el('set-admin')?.value.trim()||'',mataUang:el('set-mataUang')?.value||'',metodeDefault:el('set-metode-default')?.value||'',stokMin:el('set-stok-min')?.value===''?'':Math.max(0,Number(el('set-stok-min').value)||0),footerStruk:el('set-footer-struk')?.value.trim()||'',konfirmasiHapus:!!el('set-konfirmasi-hapus')?.checked,peringatanHarga:!!el('set-peringatan-harga')?.checked,compact:!!el('set-compact')?.checked,animasi:!!el('set-animasi')?.checked};await writeCanonicalState('settings');if(typeof loadPengaturan==='function')loadPengaturan();if(typeof renderPengaturanStatus==='function')renderPengaturanStatus();alert('Pengaturan berhasil disimpan.');};
-  window.resetPengaturan=async function(){if(!confirm('Kosongkan pengaturan toko? Data transaksi tidak akan dihapus.'))return;onlineSettings={namaUsaha:'',noWa:'',alamat:'',admin:'',mataUang:'',metodeDefault:'',stokMin:'',footerStruk:'',konfirmasiHapus:false,peringatanHarga:false,compact:false,animasi:false};await writeCanonicalState('settings-reset');if(typeof loadPengaturan==='function')loadPengaturan();alert('Pengaturan toko dikosongkan.');};
-  window.loadPedagangData=function(){};window.savePedagangData=function(){scheduleStateSave();};window.loadMutasiStokData=function(){};window.saveMutasiStokData=function(){scheduleStateSave();};
+  function stopRealtimeSync(){
+    if(realtimeChannel && db){ try{db.removeChannel(realtimeChannel);}catch(e){} }
+    realtimeChannel=null;
+    realtimeStarted=false;
+  }
 
-  window.restoreIsmailShop=async function(event){const file=event.target.files?.[0];if(!file)return;try{const d=JSON.parse(await file.text());if(!d||d.app!=='Ismail Shop')throw new Error('Format backup tidak dikenali');if(!confirm('Restore akan mengganti seluruh data toko aktif. Lanjutkan?'))return;for(const key of ARRAY_KEYS)if(Array.isArray(d[key]))setAppVar(key,d[key]);if(d.settings&&typeof d.settings==='object')onlineSettings={...onlineSettings,...d.settings};ensureProxies();await writeCanonicalState('restore');rerenderAfterState();alert('Backup berhasil dipulihkan ke database online.');}catch(err){alert('Backup tidak dapat dipulihkan: '+err.message);}event.target.value='';};
+  async function loadRemoteData(){
+    loadingRemote=true;
+    const {data,error}=await db.from('app_data').select('data_key,data').eq('user_id',currentUser.id);
+    if(error){loadingRemote=false;throw error;}
+    const rows=Array.isArray(data)?data:[];
+    const map={}; rows.forEach(r=>{map[r.data_key]=r.data;});
+    for(const key of ARRAY_KEYS){
+      const incoming=map[key];
+      setAppVar(key,Array.isArray(incoming)?incoming:[]);
+    }
+    if(map[SETTINGS_KEY] && typeof map[SETTINGS_KEY]==='object'){
+      onlineSettings={...onlineSettings,...map[SETTINGS_KEY]};
+    }
+    loadingRemote=false;
+  }
 
-  // Backward compatibility: existing code may call scheduleSave(key).
-  function scheduleSave(){scheduleStateSave();}
-  async function writeRow(){return writeCanonicalState('legacy');}
+  // Override the app's old localStorage-backed helpers.
+  window.getPengaturan=function(){return {...onlineSettings};};
+  window.isPengaturanTerisi=function(){
+    const x=window.getPengaturan();
+    return !!(x.namaUsaha||x.noWa||x.alamat||x.admin||x.mataUang||x.metodeDefault||String(x.stokMin)!==''||x.footerStruk||x.konfirmasiHapus||x.peringatanHarga||x.compact||x.animasi);
+  };
+  window.simpanPengaturan=async function(){
+    const el=id=>document.getElementById(id);
+    onlineSettings={
+      namaUsaha:el('set-nama-usaha')?.value.trim()||'',
+      noWa:el('set-no-wa')?.value.trim()||'',
+      alamat:el('set-alamat')?.value.trim()||'',
+      admin:el('set-admin')?.value.trim()||'',
+      mataUang:el('set-mataUang')?.value||'',
+      metodeDefault:el('set-metode-default')?.value||'',
+      stokMin:el('set-stok-min')?.value===''?'':Math.max(0,Number(el('set-stok-min').value)||0),
+      footerStruk:el('set-footer-struk')?.value.trim()||'',
+      konfirmasiHapus:!!el('set-konfirmasi-hapus')?.checked,
+      peringatanHarga:!!el('set-peringatan-harga')?.checked,
+      compact:!!el('set-compact')?.checked,
+      animasi:!!el('set-animasi')?.checked
+    };
+    await writeRow(SETTINGS_KEY,onlineSettings);
+    updateProfilTokoUI(onlineSettings);
+    if(typeof loadPengaturan==='function')loadPengaturan();
+    if(typeof renderPengaturanStatus==='function')renderPengaturanStatus();
+    alert('Pengaturan berhasil disimpan ke database online.');
+  };
+  window.resetPengaturan=async function(){
+    if(!confirm('Kosongkan pengaturan toko? Data stok, penjualan, pelanggan, biaya, piutang, retur, dan tutup buku tidak akan dihapus.'))return;
+    onlineSettings={
+      namaUsaha:'',noWa:'',alamat:'',admin:'',mataUang:'',metodeDefault:'',
+      stokMin:'',footerStruk:'',konfirmasiHapus:false,peringatanHarga:false,compact:false,animasi:false
+    };
+    await writeRow(SETTINGS_KEY,onlineSettings);
+    if(typeof loadPengaturan==='function')loadPengaturan();
+    alert('Pengaturan toko dikosongkan.');
+  };
+
+  window.loadPedagangData=function(){ if(typeof syncPedagangFromStock==='function')syncPedagangFromStock(); };
+  window.savePedagangData=function(){ scheduleSave('pedagangData'); };
+  window.loadMutasiStokData=function(){};
+  window.saveMutasiStokData=function(){ scheduleSave('mutasiStokData'); };
+
+  window.restoreIsmailShop=async function(event){
+    const file=event.target.files?.[0]; if(!file)return;
+    try{
+      const d=JSON.parse(await file.text());
+      if(!d || d.app!=='Ismail Shop')throw new Error('Format backup tidak dikenali');
+      if(!confirm('Restore akan mengganti data aktif dengan isi backup. Lanjutkan?'))return;
+      for(const key of ARRAY_KEYS){
+        if(Array.isArray(d[key])) setAppVar(key,d[key]);
+      }
+      if(d.settings && typeof d.settings==='object') onlineSettings={...onlineSettings,...d.settings};
+      ensureProxies();
+      await saveAllOnline();
+      if(typeof updateMetricsAndRender==='function')updateMetricsAndRender();
+      if(typeof renderDashboard==='function')renderDashboard();
+      if(typeof renderPiutang==='function')renderPiutang();
+      if(typeof renderTutupBuku==='function')renderTutupBuku();
+      if(typeof loadPengaturan==='function')loadPengaturan();
+      if(typeof renderPengaturanStatus==='function')renderPengaturanStatus();
+      alert('Backup berhasil dipulihkan ke database online.');
+    }catch(err){alert('Backup tidak dapat dipulihkan: '+err.message);}
+    event.target.value='';
+  };
+
+  function showResetForm(message='') {
+    showScreen();
+    ui('online-db-config').style.display='none';
+    ui('online-db-auth-form').style.display='none';
+    ui('online-db-reset-form').style.display='block';
+    ui('online-db-title').textContent='Buat password baru';
+    const msg=ui('online-db-reset-msg');
+    if(msg){ msg.textContent=message; msg.className='online-db-msg'; msg.style.display=message?'block':'none'; }
+  }
+
+  async function requestPasswordReset(){
+    if(!db)return;
+    // Normalisasi email agar spasi/karakter tersembunyi dari autofill atau copy-paste tidak ikut terkirim.
+    const rawEmail=ui('online-db-email').value || '';
+    const email=rawEmail.replace(/[\u200B-\u200D\uFEFF]/g,'').trim().toLowerCase();
+    ui('online-db-email').value=email;
+    if(!email){
+      showMsg('Masukkan email akun toko terlebih dahulu.',false);
+      ui('online-db-email')?.focus();
+      return;
+    }
+    // Validasi ringan di aplikasi; jangan memakai validasi browser type=email karena bisa berbeda antar-browser.
+    const emailOk=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    if(!emailOk){
+      showMsg('Format email belum benar. Contoh: toko@gmail.com',false);
+      ui('online-db-email')?.focus();
+      return;
+    }
+    const btn=ui('online-db-forgot');
+    if(btn)btn.disabled=true;
+    try{
+      const redirectTo='https://dery-bit.github.io/ismail-store/';
+      const {error}=await db.auth.resetPasswordForEmail(email,{redirectTo});
+      if(error)throw error;
+      showMsg('Link reset password sudah dikirim ke email. Buka email tersebut lalu klik link reset.',true);
+    }catch(err){
+      const message=String(err?.message||'');
+      if(/email address .* is invalid/i.test(message)){
+        showMsg('Email sudah dinormalisasi tetapi Supabase masih menolaknya. Pastikan alamat ini memang akun yang terdaftar di Ismail Store.',false);
+      }else{
+        showMsg(message||'Gagal mengirim link reset password.',false);
+      }
+    }finally{ if(btn)btn.disabled=false; }
+  }
+
+  async function updatePasswordSubmit(e){
+    e.preventDefault();
+    const p1=ui('online-db-new-password').value;
+    const p2=ui('online-db-new-password-2').value;
+    const msg=ui('online-db-reset-msg');
+    if(p1.length<6){ msg.textContent='Password minimal 6 karakter.'; msg.className='online-db-msg error'; msg.style.display='block'; return; }
+    if(p1!==p2){ msg.textContent='Password baru tidak sama.'; msg.className='online-db-msg error'; msg.style.display='block'; return; }
+    const btn=ui('online-db-reset-submit'); if(btn)btn.disabled=true;
+    try{
+      const {error}=await db.auth.updateUser({password:p1});
+      if(error)throw error;
+      msg.textContent='Password berhasil diubah. Silakan masuk dengan password baru.';
+      msg.className='online-db-msg success'; msg.style.display='block';
+      setTimeout(async()=>{ await db.auth.signOut(); history.replaceState({},document.title,window.location.pathname); showAuth(); },700);
+    }catch(err){
+      msg.textContent=err.message||'Gagal mengubah password.';
+      msg.className='online-db-msg error'; msg.style.display='block';
+    }finally{ if(btn)btn.disabled=false; }
+  }
 
   async function loginSubmit(e){
     e.preventDefault();
@@ -4798,6 +4968,8 @@
   async function boot(){
     document.body.classList.add('online-db-locked');
     ui('online-db-auth-form')?.addEventListener('submit',loginSubmit);
+    ui('online-db-forgot')?.addEventListener('click',requestPasswordReset);
+    ui('online-db-reset-form')?.addEventListener('submit',updatePasswordSubmit);
     ui('online-db-toggle')?.addEventListener('click',()=>setAuthMode(authMode==='login'?'signup':'login'));
     ui('online-db-logout')?.addEventListener('click',async()=>{
       stopRealtimeSync();
@@ -4807,10 +4979,15 @@
 
     if(!await initClient())return;
 
+    const hashParams=new URLSearchParams(window.location.hash.replace(/^#/,''));
+    const isRecovery=hashParams.get('type')==='recovery';
     const {data:{session}}=await db.auth.getSession();
-    if(session) await enterApp(session.user); else showAuth();
+    if(isRecovery){
+      showResetForm('Masukkan password baru untuk akun Ismail Store.');
+    }else if(session) await enterApp(session.user); else showAuth();
 
     db.auth.onAuthStateChange((event,session)=>{
+      if(event==='PASSWORD_RECOVERY'){ showResetForm('Masukkan password baru untuk akun Ismail Store.'); return; }
       if(event==='SIGNED_OUT'){stopRealtimeSync();onlineReady=false;currentUser=null;hideUserBar();showAuth();}
     });
 
