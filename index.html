@@ -3323,9 +3323,10 @@
       let hargaJualCustom = parseRupiahToNumber(rawHargaJualCustom);
       let potonganCustom = parseRupiahToNumber(rawPotonganCustom);
       let hargaBeli = 0;
+      let item = null;
 
       if(itemId) {
-        const item = stockData.find(i => i.id == itemId);
+        item = stockData.find(i => String(i.id) === String(itemId)) || null;
         if(item) {
           hargaBeli = typeof item.hargaBeli === 'number' ? item.hargaBeli : parseFloat(item.hargaBeli) || 0;
           
