@@ -4024,7 +4024,7 @@
           ? salesData.slice(0,5).map(s => `
               <div class="px-4 py-2.5 flex justify-between gap-3">
                 <div class="min-w-0"><div class="text-[11px] text-white font-medium truncate">${s.produk}</div><div class="text-[9px] text-gray-500">${s.tanggal || '-'} • ${s.pelanggan || 'Umum'} • ${s.qty || 1} unit</div></div>
-                <div class="text-right shrink-0"><div class="text-[11px] text-white font-semibold">${formatRupiah((Number(s.hargaJual)||0)*(Number(s.qty)||1))}</div><div class="text-[9px] text-emerald-400">Laba ${formatRupiah(s.laba || 0)}</div></div>
+                <div class="text-right shrink-0"><div class="text-[11px] text-white font-semibold">${formatRupiah(laporanOmzetKotor(s))}</div><div class="text-[9px] text-emerald-400">Laba ${formatRupiah(s.laba || 0)}</div></div>
               </div>`).join('')
           : '<div class="p-4 text-[11px] text-gray-500">Belum ada transaksi.</div>';
       }
@@ -4086,6 +4086,39 @@
     let laporanTabAktif = 'ringkasan';
     let laporanChart = null;
 
+    // ===== SUMBER ANGKA LAPORAN TERPADU =====
+    // Semua halaman laporan/dashboard memakai tanggal dan laba dari transaksi yang sama.
+    function laporanTanggalRaw(rec){
+      const raw=String(rec?.tglRaw||rec?.tgl||'').slice(0,10);
+      if(/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+      const txt=String(rec?.tanggal||'').trim();
+      const m=txt.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/);
+      return m ? `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}` : '';
+    }
+    function laporanQty(s){return Math.max(0,Number(s?.qty)||1);}
+    function laporanHargaJual(s){return Math.max(0,Number(s?.hargaJual)||0);}
+    function laporanPotonganUnit(s){return Math.max(0,Number(s?.potongan)||0);}
+    function laporanHargaBeli(s){return Math.max(0,Number(s?.hargaBeli)||0);}
+    function laporanOmzetKotor(s){return laporanHargaJual(s)*laporanQty(s);}
+    function laporanPotongan(s){return laporanPotonganUnit(s)*laporanQty(s);}
+    function laporanOmzetBersih(s){return Math.max(0,(laporanHargaJual(s)-laporanPotonganUnit(s))*laporanQty(s));}
+    function laporanLaba(s){
+      const stored=Number(s?.laba);
+      return Number.isFinite(stored) && stored!==0
+        ? stored
+        : (laporanHargaJual(s)-laporanPotonganUnit(s)-laporanHargaBeli(s))*laporanQty(s);
+    }
+    function laporanBiayaRows(){
+      const dari=document.getElementById('laporan-dari')?.value||'';
+      const sampai=document.getElementById('laporan-sampai')?.value||'';
+      return biayaData.filter(b=>{
+        const t=laporanTanggalRaw(b);
+        if(dari && t && t<dari) return false;
+        if(sampai && t && t>sampai) return false;
+        return true;
+      });
+    }
+
     function getLaporanRows() {
       const dari = document.getElementById('laporan-dari')?.value || '';
       const sampai = document.getElementById('laporan-sampai')?.value || '';
@@ -4093,7 +4126,7 @@
       const cari = (document.getElementById('laporan-cari')?.value || '').trim().toLowerCase();
 
       return salesData.filter(s => {
-        const tanggal = s.tglRaw || '';
+        const tanggal = laporanTanggalRaw(s);
         if (dari && tanggal && tanggal < dari) return false;
         if (sampai && tanggal && tanggal > sampai) return false;
         if (metode !== 'Semua' && normalizeMetodePembayaran(s.metode) !== metode) return false;
@@ -4150,7 +4183,7 @@
       const sampai = document.getElementById('laporan-sampai')?.value || '';
       const cari = (document.getElementById('laporan-cari')?.value || '').trim().toLowerCase();
       return returnData.filter(r => {
-        const tanggal = r.tglRaw || '';
+        const tanggal = laporanTanggalRaw(r);
         if (dari && tanggal && tanggal < dari) return false;
         if (sampai && tanggal && tanggal > sampai) return false;
         if (cari) {
@@ -4244,12 +4277,13 @@
 
     function renderLaporan() {
       const rows = getLaporanRows();
-      const omzetKotor = rows.reduce((a,s)=>a+(Number(s.hargaJual)||0)*(Number(s.qty)||1),0);
-      const potongan = rows.reduce((a,s)=>a+(Number(s.potongan)||0)*(Number(s.qty)||1),0);
-      const omzetBersih = rows.reduce((a,s)=>a+Math.max(0,((Number(s.hargaJual)||0)-(Number(s.potongan)||0))*(Number(s.qty)||1)),0);
-      const laba = rows.reduce((a,s)=>a+(Number(s.laba)||0),0);
-      const unit = rows.reduce((a,s)=>a+(Number(s.qty)||1),0);
-      const biaya = biayaData.reduce((a,b)=>a+(Number(b.nominal)||0),0);
+      const omzetKotor = rows.reduce((a,s)=>a+laporanOmzetKotor(s),0);
+      const potongan = rows.reduce((a,s)=>a+laporanPotongan(s),0);
+      const omzetBersih = rows.reduce((a,s)=>a+laporanOmzetBersih(s),0);
+      const laba = rows.reduce((a,s)=>a+laporanLaba(s),0);
+      const unit = rows.reduce((a,s)=>a+laporanQty(s),0);
+      const biayaRows = laporanBiayaRows();
+      const biaya = biayaRows.reduce((a,b)=>a+(Number(b.nominal)||0),0);
       const labaBersih = laba - biaya;
 
       const set=(id,v)=>{const e=document.getElementById(id);if(e)e.innerText=v;};
@@ -4271,10 +4305,10 @@
         <tr class="hover:bg-gray-900/50">
           <td class="p-3">${s.tanggal||'-'}</td><td class="p-3 font-medium text-white">${s.produk||'-'}</td>
           <td class="p-3 text-gray-400">${s.pelanggan||'Umum'}</td><td class="p-3">${normalizeMetodePembayaran(s.metode)}</td>
-          <td class="p-3 text-right">${s.qty||1}</td><td class="p-3 text-right">${formatRupiah((Number(s.hargaJual)||0)*(Number(s.qty)||1))}</td>
-          <td class="p-3 text-right text-rose-400">${formatRupiah((Number(s.potongan)||0)*(Number(s.qty)||1))}</td>
-          <td class="p-3 text-right font-medium">${formatRupiah(Math.max(0,((Number(s.hargaJual)||0)-(Number(s.potongan)||0))*(Number(s.qty)||1)))}</td>
-          <td class="p-3 text-right text-emerald-400">${formatRupiah(s.laba||0)}</td>
+          <td class="p-3 text-right">${s.qty||1}</td><td class="p-3 text-right">${formatRupiah(laporanOmzetKotor(s))}</td>
+          <td class="p-3 text-right text-rose-400">${formatRupiah(laporanPotongan(s))}</td>
+          <td class="p-3 text-right font-medium">${formatRupiah(laporanOmzetBersih(s))}</td>
+          <td class="p-3 text-right text-emerald-400">${formatRupiah(laporanLaba(s))}</td>
         </tr>`).join('') : `<tr><td colspan="9" class="p-6 text-center text-gray-500">Belum ada transaksi pada filter ini.</td></tr>`;
 
       renderLaporanPenjualan(rows);
@@ -4298,9 +4332,9 @@
         <td class="p-3">${s.tanggal||'-'}</td><td class="p-3 text-white">${s.produk||'-'}</td><td class="p-3 text-gray-400">${s.spek||'-'}</td>
         <td class="p-3">${s.pelanggan||'Umum'}</td><td class="p-3">${s.kasir||'-'}</td><td class="p-3">${normalizeMetodePembayaran(s.metode)}</td>
         <td class="p-3 text-right">${s.qty||1}</td><td class="p-3 text-right">${formatRupiah((Number(s.hargaBeli)||0)*(Number(s.qty)||1))}</td>
-        <td class="p-3 text-right">${formatRupiah((Number(s.hargaJual)||0)*(Number(s.qty)||1))}</td>
-        <td class="p-3 text-right text-rose-400">${formatRupiah((Number(s.potongan)||0)*(Number(s.qty)||1))}</td>
-        <td class="p-3 text-right text-emerald-400">${formatRupiah(s.laba||0)}</td>
+        <td class="p-3 text-right">${formatRupiah(laporanOmzetKotor(s))}</td>
+        <td class="p-3 text-right text-rose-400">${formatRupiah(laporanPotongan(s))}</td>
+        <td class="p-3 text-right text-emerald-400">${formatRupiah(laporanLaba(s))}</td>
       </tr>`).join(''):`<tr><td colspan="11" class="p-6 text-center text-gray-500">Tidak ada data.</td></tr>`;
     }
 
@@ -4389,7 +4423,7 @@
       const laba=rows.reduce((a,s)=>a+(Number(s.laba)||0),0);
       const w=window.open('','_blank','width=1000,height=700');
       if(!w){alert('Popup diblokir browser. Izinkan popup untuk mencetak laporan.');return;}
-      w.document.write(`<html><head><title>Laporan Ismail Shop</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#111}h1{margin-bottom:4px}.meta{color:#555;font-size:12px}table{width:100%;border-collapse:collapse;margin-top:18px;font-size:11px}th,td{border:1px solid #ddd;padding:7px;text-align:left}th{background:#f2f2f2}.num{text-align:right}.summary{display:flex;gap:30px;margin-top:18px;font-weight:bold}</style></head><body><h1>ISMAIL SHOP - LAPORAN PENJUALAN</h1><div class="meta">Dicetak: ${new Date().toLocaleString('id-ID')}</div><div class="summary"><div>Transaksi: ${rows.length}</div><div>Omzet Bersih: ${formatRupiah(omzet)}</div><div>Laba Penjualan: ${formatRupiah(laba)}</div><div>Unit Retur: ${getLaporanReturRows().reduce((a,r)=>a+(Number(r.qty)||0),0)}</div><div>Nilai Retur: ${formatRupiah(getLaporanReturRows().reduce((a,r)=>a+(Number(r.nilaiRefund)||0),0))}</div></div><table><thead><tr><th>Tanggal</th><th>Produk</th><th>Pelanggan</th><th>Metode</th><th>Qty</th><th>Total</th><th>Laba</th></tr></thead><tbody>${rows.map(s=>`<tr><td>${s.tanggal||'-'}</td><td>${s.produk||'-'}</td><td>${s.pelanggan||'Umum'}</td><td>${normalizeMetodePembayaran(s.metode)}</td><td class="num">${s.qty||1}</td><td class="num">${formatRupiah(Math.max(0,((Number(s.hargaJual)||0)-(Number(s.potongan)||0))*(Number(s.qty)||1)))}</td><td class="num">${formatRupiah(s.laba||0)}</td></tr>`).join('')}</tbody></table><script>window.onload=()=>window.print();<\/script></body></html>`);
+      w.document.write(`<html><head><title>Laporan Ismail Shop</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#111}h1{margin-bottom:4px}.meta{color:#555;font-size:12px}table{width:100%;border-collapse:collapse;margin-top:18px;font-size:11px}th,td{border:1px solid #ddd;padding:7px;text-align:left}th{background:#f2f2f2}.num{text-align:right}.summary{display:flex;gap:30px;margin-top:18px;font-weight:bold}</style></head><body><h1>ISMAIL SHOP - LAPORAN PENJUALAN</h1><div class="meta">Dicetak: ${new Date().toLocaleString('id-ID')}</div><div class="summary"><div>Transaksi: ${rows.length}</div><div>Omzet Bersih: ${formatRupiah(omzet)}</div><div>Laba Penjualan: ${formatRupiah(laba)}</div><div>Unit Retur: ${getLaporanReturRows().reduce((a,r)=>a+(Number(r.qty)||0),0)}</div><div>Nilai Retur: ${formatRupiah(getLaporanReturRows().reduce((a,r)=>a+(Number(r.nilaiRefund)||0),0))}</div></div><table><thead><tr><th>Tanggal</th><th>Produk</th><th>Pelanggan</th><th>Metode</th><th>Qty</th><th>Total</th><th>Laba</th></tr></thead><tbody>${rows.map(s=>`<tr><td>${s.tanggal||'-'}</td><td>${s.produk||'-'}</td><td>${s.pelanggan||'Umum'}</td><td>${normalizeMetodePembayaran(s.metode)}</td><td class="num">${s.qty||1}</td><td class="num">${formatRupiah(laporanOmzetBersih(s))}</td><td class="num">${formatRupiah(laporanLaba(s))}</td></tr>`).join('')}</tbody></table><script>window.onload=()=>window.print();<\/script></body></html>`);
       w.document.close();
     }
 
@@ -5090,7 +5124,7 @@
       if(typeof populateDynamicPeriods==='function')populateDynamicPeriods();
       if(typeof updateMetricsAndRender==='function')updateMetricsAndRender();
       if(typeof renderDashboard==='function')renderDashboard();
-      if(typeof setPeriodeLaporan==='function')setPeriodeLaporan('bulan');
+      if(typeof setPeriodeLaporan==='function')setPeriodeLaporan('semua');
       if(typeof renderTutupBuku==='function')renderTutupBuku();
       if(typeof loadPengaturan==='function')loadPengaturan();
       if(typeof syncMasterProdukFromStock==='function')syncMasterProdukFromStock();
