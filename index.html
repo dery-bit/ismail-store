@@ -782,7 +782,7 @@
             <button onclick="eksporReturCSV()" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 px-3 py-1.5 rounded-lg text-[10px] cursor-pointer">📥 Ekspor Retur CSV</button>
           </div>
           <div class="overflow-x-auto"><table class="w-full text-left text-[10px]"><thead class="bg-gray-950/40 text-gray-400"><tr>
-            <th class="p-3">Tanggal</th><th class="p-3">Produk</th><th class="p-3">Pelanggan</th><th class="p-3">Alasan</th><th class="p-3">Kondisi</th><th class="p-3 text-right">Qty</th><th class="p-3 text-right">Refund</th><th class="p-3">Stok Kembali</th>
+            <th class="p-3">Tanggal</th><th class="p-3">Produk</th><th class="p-3">Pelanggan</th><th class="p-3">Alasan</th><th class="p-3">Kondisi</th><th class="p-3 text-right">Qty</th><th class="p-3 text-right">Nilai Dibatalkan</th><th class="p-3">Stok Kembali</th><th class="p-3 text-right">Aksi</th>
           </tr></thead><tbody id="laporan-retur-tbody" class="divide-y divide-gray-800"></tbody></table></div>
         </div>
       </div>
@@ -1535,7 +1535,7 @@
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div><label class="block text-gray-400 mb-1">Pelanggan</label><input type="text" id="retur-pelanggan" readonly class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-gray-400"></div>
-          <div><label class="block text-gray-400 mb-1">Refund / Nilai Retur</label><input type="text" id="retur-nilai" readonly class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-yellow-400"></div>
+          <div><label class="block text-gray-400 mb-1">Nilai Penjualan Dibatalkan</label><input type="text" id="retur-nilai" readonly class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-yellow-400"></div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div><label class="block text-gray-400 mb-1">Alasan Retur *</label><select id="retur-alasan" required class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-white"><option>Barang rusak</option><option>Salah kirim</option><option>Tidak sesuai pesanan</option><option>Pesanan marketplace dibatalkan</option><option>Customer berubah pikiran</option><option>Lainnya</option></select></div>
@@ -1927,7 +1927,7 @@
       const sales = salesData.filter(s => tbInRange(s.tglRaw, start, end));
       const biaya = biayaData.filter(b => tbInRange(b.tanggal, start, end));
       const potongan = potonganData.filter(b => tbInRange(b.tanggal, start, end));
-      const retur = returnData.filter(r => tbInRange(r.tglRaw || r.tanggal, start, end));
+      const retur = returnData.filter(r => !r.appliedToSale && tbInRange(r.tglRaw || r.tanggal, start, end));
 
       const transaksi = sales.length;
       const unit = sales.reduce((a,s) => a + (Number(s.qty) || 0), 0);
@@ -3993,7 +3993,7 @@
 
     function getReturnAccountingForSales(rows) {
       const ids = new Set((rows||[]).map(s=>String(s.id)));
-      const rr = returnData.filter(r=>ids.has(String(r.saleId)));
+      const rr = returnData.filter(r=>ids.has(String(r.saleId)) && !r.appliedToSale);
       return {
         rows: rr,
         qty: rr.reduce((a,r)=>a+(Number(r.qty)||0),0),
@@ -4200,7 +4200,7 @@
     function openReturModal() {
       const modal=document.getElementById('modal-retur'); if(!modal)return;
       const select=document.getElementById('retur-sale-select');
-      const options=salesData.map(s=>`<option value="${s.id}">${s.tanggal||'-'} — ${s.produk||'Produk'} — ${s.pelanggan||'Umum'} — ${formatRupiah((Number(s.hargaJual)||0)-(Number(s.potongan)||0))}</option>`).join('');
+      const options=salesData.map(s=>`<option value="${s.id}">${s.tanggal||'-'} — ${s.produk||'Produk'} ${s.spek?`(${s.spek})`:''} — ${s.pelanggan||'Umum'} — ${formatRupiah((Number(s.hargaJual)||0)-(Number(s.potongan)||0))}</option>`).join('');
       select.innerHTML='<option value="">-- Pilih transaksi --</option>'+options;
       document.getElementById('retur-tanggal').value=new Date().toISOString().slice(0,10);
       document.getElementById('retur-qty').value=1;
@@ -4210,8 +4210,10 @@
       modal.classList.remove('hidden');
     }
 
+    // Retur baru langsung membalik dampak transaksi penjualan (qty/laba/piutang),
+    // sehingga hanya retur lama yang belum diterapkan yang dihitung di sini.
     function getReturnedQtyForSale(saleId) {
-      return returnData.filter(r=>String(r.saleId)===String(saleId)).reduce((a,r)=>a+(Number(r.qty)||0),0);
+      return returnData.filter(r=>String(r.saleId)===String(saleId) && !r.appliedToSale).reduce((a,r)=>a+(Number(r.qty)||0),0);
     }
 
     function prepareReturFromSale() {
@@ -4239,28 +4241,115 @@
       e.preventDefault();
       const saleId=document.getElementById('retur-sale-select').value;
       const s=salesData.find(x=>String(x.id)===String(saleId));
-      const qty=Number(document.getElementById('retur-qty').value)||0;
+      const qty=Math.floor(Number(document.getElementById('retur-qty').value)||0);
       if(!s||qty<=0){alert('Pilih transaksi dan jumlah retur terlebih dahulu.');return;}
-      const sudah=getReturnedQtyForSale(s.id), tersedia=Math.max(0,(Number(s.qty)||1)-sudah);
+
+      const sudah=getReturnedQtyForSale(s.id);
+      const tersedia=Math.max(0,(Number(s.qty)||1)-sudah);
       if(qty>tersedia){alert(`Jumlah retur melebihi sisa unit yang dapat diretur (${tersedia} unit).`);return;}
       const tgl=document.getElementById('retur-tanggal').value;
-      if (!tgl) { alert('Tanggal retur wajib diisi.'); return; }
-      if (isTanggalTutupBuku(tgl)) { alert('Retur tidak dapat dicatat pada periode yang sudah ditutup buku.'); return; }
+      if(!tgl){alert('Tanggal retur wajib diisi.');return;}
+      if(isTanggalTutupBuku(tgl)){alert('Retur tidak dapat dicatat pada periode yang sudah ditutup buku.');return;}
+
+      // Jika transaksi sudah mempunyai pembayaran piutang, jangan membaliknya otomatis.
+      // Alur retur ini memang khusus membatalkan barang yang dikembalikan sebelum dibayar.
+      const paid=piutangPaymentData.some(p=>String(p.saleId)===String(s.id) && (Number(p.jumlah)||0)>0);
+      if(paid){alert('Transaksi ini sudah memiliki pembayaran piutang. Retur otomatis tidak dijalankan agar catatan pembayaran tidak rusak.');return;}
+
       const masukStok=document.getElementById('retur-masuk-stok').checked;
-      if (masukStok && !s.stockId) { alert('Transaksi lama tidak memiliki referensi stok. Retur masuk stok tidak dapat diproses dengan aman.'); return; }
+      if(masukStok&&!s.stockId){alert('Transaksi lama tidak memiliki referensi stok. Retur masuk stok tidak dapat diproses dengan aman.');return;}
+      if(masukStok){
+        const item=stockData.find(i=>String(i.id)===String(s.stockId));
+        if(!item){alert('Item stok asal transaksi tidak ditemukan. Retur dibatalkan agar tidak membuat selisih stok.');return;}
+      }
+
       const nilaiRefund=Math.max(0,((Number(s.hargaJual)||0)-(Number(s.potongan)||0))*qty);
       const nilaiModal=(Number(s.hargaBeli)||0)*qty;
-      const r={id:Date.now(),saleId:s.id,stockId:s.stockId||null,produk:s.produk||'Produk',spek:s.spek||'-',pelanggan:s.pelanggan||'Umum',qty,hargaJual:Number(s.hargaJual)||0,potongan:Number(s.potongan)||0,hargaBeli:Number(s.hargaBeli)||0,nilaiRefund,tglRaw:tgl,tanggal:formatDateToIndonesian(tgl),alasan:document.getElementById('retur-alasan').value,kondisi:document.getElementById('retur-kondisi').value,masukStok,catatan:document.getElementById('retur-catatan').value.trim(),nilaiModal};
-      returnData.unshift(r);
-      if(masukStok && s.stockId){
+      const saleSnapshot=JSON.parse(JSON.stringify(s));
+      const r={
+        id:Date.now()+Math.floor(Math.random()*1000), saleId:s.id, stockId:s.stockId||null,
+        produk:s.produk||'Produk', spek:s.spek||'-', pelanggan:s.pelanggan||'Umum', qty,
+        hargaJual:Number(s.hargaJual)||0, potongan:Number(s.potongan)||0, hargaBeli:Number(s.hargaBeli)||0,
+        nilaiRefund, tglRaw:tgl, tanggal:formatDateToIndonesian(tgl),
+        alasan:document.getElementById('retur-alasan').value,
+        kondisi:document.getElementById('retur-kondisi').value,
+        masukStok, catatan:document.getElementById('retur-catatan').value.trim(), nilaiModal,
+        appliedToSale:true, saleSnapshot, createdAt:new Date().toISOString()
+      };
+
+      // Barang kembali ke stok.
+      if(masukStok){
         const item=stockData.find(i=>String(i.id)===String(s.stockId));
-        if(item){item.jumlah=(Number(item.jumlah)||0)+qty;item.status='Tersedia';}
+        item.jumlah=(Number(item.jumlah)||0)+qty;
+        item.status='Tersedia';
       }
-      closeModal('modal-retur');
+
+      // Retur dianggap pembatalan penjualan, bukan transaksi baru.
+      // Karena itu omzet, laba dan unit terjual langsung berkurang dari data penjualan.
+      const sidx=salesData.findIndex(x=>String(x.id)===String(s.id));
+      if(sidx!==-1){
+        const remaining=Math.max(0,(Number(salesData[sidx].qty)||1)-qty);
+        if(remaining===0){
+          salesData.splice(sidx,1);
+          piutangData=piutangData.filter(p=>String(p.saleId)!==String(s.id));
+          piutangPaymentData=piutangPaymentData.filter(p=>String(p.saleId)!==String(s.id));
+        }else{
+          salesData[sidx].qty=remaining;
+          const hargaBersih=Math.max(0,(Number(salesData[sidx].hargaJual)||0)-(Number(salesData[sidx].potongan)||0));
+          salesData[sidx].laba=(hargaBersih-(Number(salesData[sidx].hargaBeli)||0))*remaining;
+          syncPiutangFromSale(salesData[sidx]);
+        }
+      }
+
+      returnData.unshift(r);
+      renderSalesTable();
+      renderPiutang();
       updateMetricsAndRender();
       renderDashboard();
       renderLaporan();
-      alert(`Retur berhasil dicatat: ${qty} unit — ${formatRupiah(nilaiRefund)}.`);
+      closeModal('modal-retur');
+      alert(`Retur berhasil. ${qty} unit kembali ke stok dan nilai penjualan/laba terkait sudah dibatalkan.`);
+    }
+
+    function hapusRetur(returId){
+      const r=returnData.find(x=>String(x.id)===String(returId));
+      if(!r)return;
+      if(isTanggalTutupBuku(r.tglRaw||'')){alert('Retur pada periode yang sudah ditutup buku tidak dapat dihapus.');return;}
+      if(!confirm('Hapus retur ini? Stok dan transaksi penjualan akan dikembalikan seperti sebelum retur.'))return;
+
+      if(r.masukStok){
+        const item=stockData.find(i=>String(i.id)===String(r.stockId));
+        if(!item){alert('Stok asal tidak ditemukan. Retur tidak dihapus agar data tidak selisih.');return;}
+        if((Number(item.jumlah)||0)<(Number(r.qty)||0)){
+          alert(`Retur tidak dapat dihapus karena stok saat ini hanya ${Number(item.jumlah)||0} unit, sedangkan ${Number(r.qty)||0} unit harus dikeluarkan kembali.`);
+          return;
+        }
+        item.jumlah=Math.max(0,(Number(item.jumlah)||0)-(Number(r.qty)||0));
+        item.status=item.jumlah>0?'Tersedia':'Kosong';
+      }
+
+      // Balikkan pembatalan penjualan.
+      if(r.appliedToSale){
+        let sale=salesData.find(x=>String(x.id)===String(r.saleId));
+        if(sale){
+          sale.qty=(Number(sale.qty)||0)+(Number(r.qty)||0);
+          const hargaBersih=Math.max(0,(Number(sale.hargaJual)||0)-(Number(sale.potongan)||0));
+          sale.laba=(hargaBersih-(Number(sale.hargaBeli)||0))*sale.qty;
+          syncPiutangFromSale(sale);
+        }else if(r.saleSnapshot){
+          sale=JSON.parse(JSON.stringify(r.saleSnapshot));
+          salesData.push(sale);
+          syncPiutangFromSale(sale);
+        }
+      }
+
+      returnData=returnData.filter(x=>String(x.id)!==String(returId));
+      renderSalesTable();
+      renderPiutang();
+      updateMetricsAndRender();
+      renderDashboard();
+      renderLaporan();
+      alert('Retur dihapus. Stok dan transaksi sudah dikembalikan seperti sebelum retur.');
     }
 
     function renderLaporanRetur(rows) {
@@ -4270,7 +4359,7 @@
       set('lap-retur-unit-2',rows.reduce((a,r)=>a+(Number(r.qty)||0),0));
       set('lap-retur-refund',formatRupiah(rows.reduce((a,r)=>a+(Number(r.nilaiRefund)||0),0)));
       set('lap-retur-restock',rows.filter(r=>r.masukStok).reduce((a,r)=>a+(Number(r.qty)||0),0)+' unit');
-      el.innerHTML=rows.length?rows.map(r=>`<tr><td class="p-3">${r.tanggal||'-'}</td><td class="p-3 font-medium text-white">${r.produk||'-'}</td><td class="p-3">${r.pelanggan||'Umum'}</td><td class="p-3">${r.alasan||'-'}</td><td class="p-3">${r.kondisi||'-'}</td><td class="p-3 text-right text-rose-400">${r.qty||0}</td><td class="p-3 text-right">${formatRupiah(r.nilaiRefund||0)}</td><td class="p-3">${r.masukStok?'<span class="text-emerald-400">Ya</span>':'<span class="text-gray-500">Tidak</span>'}</td></tr>`).join(''):`<tr><td colspan="8" class="p-6 text-center text-gray-500">Belum ada retur pada periode ini.</td></tr>`;
+      el.innerHTML=rows.length?rows.map(r=>`<tr><td class="p-3">${r.tanggal||'-'}</td><td class="p-3 font-medium text-white">${r.produk||'-'}</td><td class="p-3">${r.pelanggan||'Umum'}</td><td class="p-3">${r.alasan||'-'}</td><td class="p-3">${r.kondisi||'-'}</td><td class="p-3 text-right text-rose-400">${r.qty||0}</td><td class="p-3 text-right">${formatRupiah(r.nilaiRefund||0)}</td><td class="p-3">${r.masukStok?'<span class="text-emerald-400">Ya</span>':'<span class="text-gray-500">Tidak</span>'}</td><td class="p-3 text-right"><button onclick="hapusRetur(${r.id})" class="text-rose-400 hover:text-rose-300 font-semibold cursor-pointer">Hapus</button></td></tr>`).join(''):`<tr><td colspan="9" class="p-6 text-center text-gray-500">Belum ada retur pada periode ini.</td></tr>`;
     }
 
     function eksporReturCSV(){
@@ -4354,7 +4443,7 @@
         map[k].modal+=(Number(s.hargaBeli)||0)*(Number(s.qty)||1);
         map[k].laba+=Number(s.laba)||0;
       });
-      returnData.filter(r=>rows.some(s=>String(s.id)===String(r.saleId))).forEach(r=>{
+      returnData.filter(r=>!r.appliedToSale && rows.some(s=>String(s.id)===String(r.saleId))).forEach(r=>{
         const k=r.produk||'Produk'; if(!map[k])return;
         map[k].unit=Math.max(0,map[k].unit-(Number(r.qty)||0));
         map[k].omzet=Math.max(0,map[k].omzet-(Number(r.nilaiRefund)||0));
@@ -4376,7 +4465,7 @@
         map[k].potongan+=(Number(s.potongan)||0)*(Number(s.qty)||1);
         map[k].laba+=Number(s.laba)||0;
       });
-      returnData.filter(r=>rows.some(s=>String(s.id)===String(r.saleId))).forEach(r=>{
+      returnData.filter(r=>!r.appliedToSale && rows.some(s=>String(s.id)===String(r.saleId))).forEach(r=>{
         const s=rows.find(x=>String(x.id)===String(r.saleId)); if(!s)return; const k=normalizeMetodePembayaran(s.metode); if(!map[k])return;
         map[k].unit=Math.max(0,map[k].unit-(Number(r.qty)||0));
         map[k].omzet=Math.max(0,map[k].omzet-(Number(r.hargaJual)||0)*(Number(r.qty)||0));
@@ -4397,7 +4486,7 @@
         map[k].total+=Math.max(0,((Number(s.hargaJual)||0)-(Number(s.potongan)||0))*(Number(s.qty)||1));
         map[k].laba+=Number(s.laba)||0;
       });
-      returnData.filter(r=>rows.some(s=>String(s.id)===String(r.saleId))).forEach(r=>{
+      returnData.filter(r=>!r.appliedToSale && rows.some(s=>String(s.id)===String(r.saleId))).forEach(r=>{
         const k=r.pelanggan||'Umum'; if(!map[k])return;
         map[k].unit=Math.max(0,map[k].unit-(Number(r.qty)||0));
         map[k].total=Math.max(0,map[k].total-(Number(r.nilaiRefund)||0));
@@ -4428,7 +4517,7 @@
       const canvas=document.getElementById('laporan-chart'); if(!canvas||typeof Chart==='undefined')return;
       const map={};
       rows.forEach(s=>{const k=(s.tglRaw||'').substring(0,7)||'Tanpa tanggal';if(!map[k])map[k]={omzet:0,laba:0};map[k].omzet+=Math.max(0,((Number(s.hargaJual)||0)-(Number(s.potongan)||0))*(Number(s.qty)||1));map[k].laba+=Number(s.laba)||0;});
-      returnData.filter(r=>rows.some(s=>String(s.id)===String(r.saleId))).forEach(r=>{const k=(r.tglRaw||r.tanggal||'').substring(0,7)||'Tanpa tanggal';if(!map[k])map[k]={omzet:0,laba:0};map[k].omzet-=Number(r.nilaiRefund)||0;map[k].laba-=((Number(r.nilaiRefund)||0)-(Number(r.nilaiModal)||((Number(r.hargaBeli)||0)*(Number(r.qty)||0))));});
+      returnData.filter(r=>!r.appliedToSale && rows.some(s=>String(s.id)===String(r.saleId))).forEach(r=>{const k=(r.tglRaw||r.tanggal||'').substring(0,7)||'Tanpa tanggal';if(!map[k])map[k]={omzet:0,laba:0};map[k].omzet-=Number(r.nilaiRefund)||0;map[k].laba-=((Number(r.nilaiRefund)||0)-(Number(r.nilaiModal)||((Number(r.hargaBeli)||0)*(Number(r.qty)||0))));});
       const keys=Object.keys(map).sort().slice(-12);
       if(laporanChart)laporanChart.destroy();
       laporanChart=new Chart(canvas.getContext('2d'),{type:'bar',data:{labels:keys.length?keys:['Belum ada data'],datasets:[{label:'Omzet Bersih',data:keys.map(k=>map[k].omzet),borderWidth:1},{label:'Laba',data:keys.map(k=>map[k].laba),borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#cbd5e1',font:{size:10}}}},scales:{x:{ticks:{color:'#94a3b8',font:{size:9}}},y:{ticks:{color:'#94a3b8',font:{size:9},callback:v=>'Rp '+Number(v).toLocaleString('id-ID')}}}}});
@@ -4476,7 +4565,7 @@
     function chartGrafik(k,id,cfg){const c=document.getElementById(id);if(!c||typeof Chart==='undefined')return;destroyGrafik(k);grafikCharts[k]=new Chart(c.getContext('2d'),cfg);}
     function renderGrafik(){
       const rows=getGrafikRows(),rets=getGrafikReturns(); if(!document.getElementById('grafik-transaksi'))return;
-      const omzet=rows.reduce((a,s)=>a+Math.max(0,((+s.hargaJual||0)-(+s.potongan||0))*(+s.qty||1)),0)-rets.reduce((a,r)=>a+(+r.nilaiRefund||0),0),laba=rows.reduce((a,s)=>a+(+s.laba||0),0)-rets.reduce((a,r)=>a+((+r.nilaiRefund||0)-(+r.nilaiModal||((+r.hargaBeli||0)*(+r.qty||0)))),0),unit=Math.max(0,rows.reduce((a,s)=>a+(+s.qty||1),0)-rets.reduce((a,r)=>a+(+r.qty||0),0)),ru=rets.reduce((a,r)=>a+(+r.qty||0),0),rn=rets.reduce((a,r)=>a+(+r.nilaiRefund||0),0);
+      const omzet=rows.reduce((a,s)=>a+Math.max(0,((+s.hargaJual||0)-(+s.potongan||0))*(+s.qty||1)),0)-rets.filter(r=>!r.appliedToSale).reduce((a,r)=>a+(+r.nilaiRefund||0),0),laba=rows.reduce((a,s)=>a+(+s.laba||0),0)-rets.filter(r=>!r.appliedToSale).reduce((a,r)=>a+((+r.nilaiRefund||0)-(+r.nilaiModal||((+r.hargaBeli||0)*(+r.qty||0)))),0),unit=Math.max(0,rows.reduce((a,s)=>a+(+s.qty||1),0)-rets.filter(r=>!r.appliedToSale).reduce((a,r)=>a+(+r.qty||0),0)),ru=rets.reduce((a,r)=>a+(+r.qty||0),0),rn=rets.reduce((a,r)=>a+(+r.nilaiRefund||0),0);
       document.getElementById('grafik-transaksi').textContent=rows.length.toLocaleString('id-ID');document.getElementById('grafik-unit').textContent=unit.toLocaleString('id-ID');document.getElementById('grafik-omzet').textContent=formatRupiah(omzet);document.getElementById('grafik-laba').textContent=formatRupiah(laba);document.getElementById('grafik-retur-unit').textContent=ru.toLocaleString('id-ID');document.getElementById('grafik-retur-nilai').textContent=formatRupiah(rn);
       const by={},rr={};rows.forEach(s=>{let k=s.tglRaw||'Tanpa tanggal';by[k]??={omzet:0,laba:0,unit:0};by[k].omzet+=Math.max(0,(+s.hargaJual||0-(+s.potongan||0))*(+s.qty||1));by[k].laba+=+s.laba||0;by[k].unit+=+s.qty||1;});rets.forEach(r=>{let k=r.tglRaw||r.tanggal||'Tanpa tanggal';rr[k]=(rr[k]||0)+(+r.qty||0);});const ks=Object.keys(by).sort(),labs=ks.length?ks.map(formatTanggalGrafik):['Belum ada data'];
       chartGrafik('ol','grafik-omzet-laba-chart',{type:'line',data:{labels:labs,datasets:[{label:'Omzet Bersih',data:ks.length?ks.map(k=>by[k].omzet):[0],borderWidth:2,tension:.25},{label:'Laba',data:ks.length?ks.map(k=>by[k].laba):[0],borderWidth:2,tension:.25}]},options:{responsive:true,maintainAspectRatio:false,scales:{y:{ticks:{callback:v=>'Rp '+Number(v).toLocaleString('id-ID')}}}}});
