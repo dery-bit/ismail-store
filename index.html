@@ -4463,7 +4463,7 @@
 
   const DATA_KEYS = [
     'stockData','salesData','potonganData','biayaData','returnData','customerData',
-    'pedagangData','mutasiStokData','piutangData','piutangPaymentData','tutupBukuData'
+    'pedagangData','mutasiStokData','piutangData','piutangPaymentData','tutupBukuData','masterProdukData'
   ];
   const ARRAY_KEYS = DATA_KEYS;
   const SETTINGS_KEY = 'settings';
@@ -4487,249 +4487,131 @@
     namaUsaha:'',noWa:'',alamat:'',admin:'',mataUang:'',metodeDefault:'',
     stokMin:'',footerStruk:'',konfirmasiHapus:false,peringatanHarga:false,compact:false,animasi:false
   };
+  let stateRevision = 0;
+  let stateUpdatedAt = '';
+  let stateChannel = null;
+  let stateSyncStarted = false;
+  let stateWriteQueue = Promise.resolve();
+  let applyingRemoteState = false;
 
   const cfg = window.ISMAIL_SUPABASE_CONFIG || {};
   const configReady = !!(cfg.url && cfg.publishableKey && !String(cfg.url).includes('GANTI_'));
 
-  function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
+  function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;"}[m]));}
   function ui(id){return document.getElementById(id);}
   function showScreen(){ui('online-db-screen')?.classList.remove('hidden');document.body.classList.add('online-db-locked');}
   function hideScreen(){ui('online-db-screen')?.classList.add('hidden');document.body.classList.remove('online-db-locked');}
-  function showMsg(message, ok){
-    const el=ui('online-db-msg'); if(!el)return;
-    el.textContent=message; el.className='online-db-msg '+(ok?'ok':'error'); el.style.display='block';
-  }
-  function setAuthMode(mode){
-    authMode=mode;
-    const title=ui('online-db-title');
-    const submit=ui('online-db-submit');
-    const toggle=ui('online-db-toggle');
-    const msg=ui('online-db-msg');
-    if(title) title.textContent=mode==='login'?'Masuk ke database toko':'Buat akun database toko';
-    if(submit) submit.textContent=mode==='login'?'🔐 Masuk':'➕ Buat akun';
-    if(toggle) toggle.textContent=mode==='login'?'Buat akun baru':'Sudah punya akun? Masuk';
-    if(msg){ msg.textContent=''; msg.style.display='none'; }
-  }
-  function showConfig(){
-    showScreen();
-    ui('online-db-config').style.display='block';
-    ui('online-db-auth-form').style.display='none';
-    ui('online-db-title').textContent='Konfigurasi database';
-  }
-  function showAuth(){
-    showScreen();
-    ui('online-db-config').style.display='none';
-    ui('online-db-auth-form').style.display='block';
-    setAuthMode('login');
-  }
-  function showUserBar(){
-    const b=ui('online-db-userbar'); if(!b)return;
-    b.classList.add('show');
-    ui('online-db-user-email').textContent=currentUser?.email||'Akun toko';
-  }
+  function showMsg(message, ok){const el=ui('online-db-msg');if(!el)return;el.textContent=message;el.className='online-db-msg '+(ok?'ok':'error');el.style.display='block';}
+  function setAuthMode(mode){authMode=mode;const title=ui('online-db-title'),submit=ui('online-db-submit'),toggle=ui('online-db-toggle'),msg=ui('online-db-msg');if(title)title.textContent=mode==='login'?'Masuk ke database toko':'Buat akun database toko';if(submit)submit.textContent=mode==='login'?'🔐 Masuk':'➕ Buat akun';if(toggle)toggle.textContent=mode==='login'?'Buat akun baru':'Sudah punya akun? Masuk';if(msg){msg.textContent='';msg.style.display='none';}}
+  function showConfig(){showScreen();const a=ui('online-db-config'),b=ui('online-db-auth-form'),t=ui('online-db-title');if(a)a.style.display='block';if(b)b.style.display='none';if(t)t.textContent='Konfigurasi database';}
+  function showAuth(){showScreen();const a=ui('online-db-config'),b=ui('online-db-auth-form');if(a)a.style.display='none';if(b)b.style.display='block';setAuthMode('login');}
+  function showUserBar(){const b=ui('online-db-userbar');if(!b)return;b.classList.add('show');const e=ui('online-db-user-email');if(e)e.textContent=currentUser?.email||'Akun toko';}
   function hideUserBar(){ui('online-db-userbar')?.classList.remove('show');}
 
   async function initClient(){
     if(!configReady){showConfig();return false;}
-    if(!window.supabase || typeof window.supabase.createClient!=='function'){
-      showScreen(); showMsg('Library Supabase gagal dimuat. Periksa koneksi internet.',false); return false;
-    }
-    db=window.supabase.createClient(cfg.url,cfg.publishableKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
-    return true;
+    if(!window.supabase || typeof window.supabase.createClient!=='function'){showScreen();showMsg('Library Supabase gagal dimuat. Periksa koneksi internet.',false);return false;}
+    db=window.supabase.createClient(cfg.url,cfg.publishableKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});return true;
+  }
+
+  function getLocalState(){
+    const state={};
+    for(const key of ARRAY_KEYS){try{state[key]=JSON.parse(JSON.stringify(getAppVar(key)||[]));}catch(e){state[key]=[];}}
+    state.settings=JSON.parse(JSON.stringify(onlineSettings||{}));
+    return state;
+  }
+  function applyLocalState(state){
+    applyingRemoteState=true;loadingRemote=true;
+    try{
+      for(const key of ARRAY_KEYS)setAppVar(key,Array.isArray(state?.[key])?state[key]:[]);
+      if(state?.settings && typeof state.settings==='object')onlineSettings={...state.settings};
+    }finally{loadingRemote=false;applyingRemoteState=false;}
   }
 
   function deepProxy(value,key){
-    if(!value || typeof value!=='object')return value;
+    if(!value||typeof value!=='object')return value;
     if(proxiedObjects.has(value))return proxiedObjects.get(value);
-    const proxy=new Proxy(value,{
-      get(target,prop,receiver){
-        const v=Reflect.get(target,prop,receiver);
-        return (v && typeof v==='object') ? deepProxy(v,key) : v;
-      },
-      set(target,prop,val,receiver){
-        const ok=Reflect.set(target,prop,val,receiver);
-        if(ok && onlineReady && !loadingRemote) scheduleSave(key);
-        return ok;
-      },
-      deleteProperty(target,prop){
-        const ok=Reflect.deleteProperty(target,prop);
-        if(ok && onlineReady && !loadingRemote) scheduleSave(key);
-        return ok;
-      }
-    });
-    proxiedObjects.set(value,proxy);
-    return proxy;
+    const proxy=new Proxy(value,{get(target,prop,receiver){const v=Reflect.get(target,prop,receiver);return(v&&typeof v==='object')?deepProxy(v,key):v;},set(target,prop,val,receiver){const ok=Reflect.set(target,prop,val,receiver);if(ok&&onlineReady&&!loadingRemote&&!applyingRemoteState)scheduleStateSave();return ok;},deleteProperty(target,prop){const ok=Reflect.deleteProperty(target,prop);if(ok&&onlineReady&&!loadingRemote&&!applyingRemoteState)scheduleStateSave();return ok;}});
+    proxiedObjects.set(value,proxy);return proxy;
   }
+  function ensureProxies(){if(!onlineReady||loadingRemote||applyingRemoteState)return;for(const key of ARRAY_KEYS){try{const current=getAppVar(key);if(!Array.isArray(current))setAppVar(key,[]);const p=deepProxy(getAppVar(key),key);if(p!==getAppVar(key))setAppVar(key,p);}catch(e){}}}
 
-  function ensureProxies(){
-    if(!onlineReady || loadingRemote)return;
-    for(const key of ARRAY_KEYS){
-      try{
-        if(!Array.isArray(getAppVar(key))) setAppVar(key,[]);
-        const current=getAppVar(key); const p=deepProxy(current,key);
-        if(p!==current){
-          setAppVar(key,p);
-          scheduleSave(key);
-        }
-      }catch(e){}
+  async function readCanonicalState(){
+    const {data,error}=await db.from('store_state').select('state,revision,updated_at').eq('user_id',currentUser.id).maybeSingle();
+    if(error)throw error;
+    if(!data){
+      const initial=getLocalState();
+      const {data:created,error:ce}=await db.from('store_state').insert({user_id:currentUser.id,state:initial,revision:0}).select('state,revision,updated_at').single();
+      if(ce)throw ce;
+      stateRevision=created.revision||0;stateUpdatedAt=created.updated_at||'';return created.state||initial;
     }
+    stateRevision=Number(data.revision)||0;stateUpdatedAt=data.updated_at||'';return data.state||{};
   }
 
-  async function writeRow(key,data){
-    if(!db || !currentUser || !onlineReady)return;
-    const payload={user_id:currentUser.id,data_key:key,data,updated_at:new Date().toISOString()};
-    const {error}=await db.from('app_data').upsert(payload,{onConflict:'user_id,data_key'});
-    if(error){ console.error('Supabase save',key,error); throw error; }
-    return true;
-  }
-
-  function scheduleSave(key){
-    if(!onlineReady || loadingRemote)return;
-    clearTimeout(saveTimers[key]);
-    saveTimers[key]=setTimeout(async()=>{
-      try{
-        const value=(key===SETTINGS_KEY)?onlineSettings:getAppVar(key);
-        await writeRow(key,JSON.parse(JSON.stringify(value)));
-      }catch(e){console.error('Online save failed',key,e);}
-    },650);
-  }
-
-  async function saveAllOnline(){
-    if(!onlineReady || !currentUser)return;
-    savingRemote=true;
-    try{
-      for(const key of ARRAY_KEYS){
-        await writeRow(key,JSON.parse(JSON.stringify(getAppVar(key)||[])));
-      }
-      await writeRow(SETTINGS_KEY,JSON.parse(JSON.stringify(onlineSettings)));
-    }finally{savingRemote=false;}
-  }
-
-  // Pengaman tambahan: aplikasi lama tidak selalu punya fungsi save khusus untuk
-  // setiap array. Pantau perubahan isi data secara berkala sehingga mutasi,
-  // unshift/push, atau penggantian seluruh array tetap dikirim ke Supabase.
-  function startCloudWatcher(){
-    if(cloudWatcherStarted)return;
-    cloudWatcherStarted=true;
-    for(const key of ARRAY_KEYS){
-      try{cloudSnapshots[key]=JSON.stringify(getAppVar(key)||[]);}catch(e){cloudSnapshots[key]='[]';}
-    }
-    cloudSnapshots[SETTINGS_KEY]=JSON.stringify(onlineSettings||{});
-    setInterval(async()=>{
-      if(!onlineReady || !currentUser || loadingRemote || savingRemote)return;
-      for(const key of ARRAY_KEYS){
-        try{
-          const value=JSON.parse(JSON.stringify(getAppVar(key)||[]));
-          const sig=JSON.stringify(value);
-          if(sig!==cloudSnapshots[key]){
-            await writeRow(key,value);
-            cloudSnapshots[key]=sig;
-          }
-        }catch(e){console.error('Cloud watcher',key,e);}
-      }
-      try{
-        const settings=JSON.parse(JSON.stringify(onlineSettings||{}));
-        const sig=JSON.stringify(settings);
-        if(sig!==cloudSnapshots[SETTINGS_KEY]){
-          await writeRow(SETTINGS_KEY,settings);
-          cloudSnapshots[SETTINGS_KEY]=sig;
+  async function writeCanonicalState(reason='auto'){
+    if(!onlineReady||!currentUser||loadingRemote||applyingRemoteState)return;
+    const snapshot=getLocalState();
+    stateWriteQueue=stateWriteQueue.then(async()=>{
+      if(!onlineReady||!currentUser||loadingRemote||applyingRemoteState)return;
+      const {data,error}=await db.rpc('save_store_state',{p_state:snapshot,p_expected_revision:stateRevision});
+      if(error){
+        if(String(error.message||'').includes('STATE_CONFLICT')){
+          const latest=await readCanonicalState();
+          applyLocalState(latest);ensureProxies();rerenderAfterState();
+          throw new Error('Data berubah di perangkat lain. Data terbaru sudah dimuat agar tidak terjadi selisih. Silakan ulangi tindakan terakhir.');
         }
-      }catch(e){console.error('Cloud watcher settings',e);}
-    },1000);
-    // Safety net: sales are business-critical. Even if an old function replaces
-    // the array in a way the proxy cannot observe, retry the current sales data.
-    setInterval(async()=>{
-      if(!onlineReady || !currentUser || loadingRemote || savingRemote)return;
-      try{
-        const value=JSON.parse(JSON.stringify(getAppVar('salesData')||[]));
-        await writeRow('salesData',value);
-        cloudSnapshots.salesData=JSON.stringify(value);
-      }catch(e){ console.error('Sales cloud sync retry',e); }
-    },3000);
+        throw error;
+      }
+      if(data && data.state){stateRevision=Number(data.revision)||stateRevision;stateUpdatedAt=data.updated_at||stateUpdatedAt;}
+    }).catch(err=>{console.error('State sync:',reason,err);showSyncWarning(err.message||String(err));});
+    return stateWriteQueue;
   }
+  function scheduleStateSave(){clearTimeout(saveTimers.__state);saveTimers.__state=setTimeout(()=>writeCanonicalState('change'),450);}
+  function rerenderAfterState(){try{if(typeof syncCustomersFromSales==='function')syncCustomersFromSales();if(typeof syncPedagangFromStock==='function')syncPedagangFromStock();if(typeof populateCustomerSelect==='function')populateCustomerSelect();if(typeof populateDynamicPeriods==='function')populateDynamicPeriods();if(typeof updateMetricsAndRender==='function')updateMetricsAndRender();if(typeof renderDashboard==='function')renderDashboard();if(typeof renderPiutang==='function')renderPiutang();if(typeof renderTutupBuku==='function')renderTutupBuku();if(typeof loadPengaturan==='function')loadPengaturan();if(typeof syncMasterProdukFromStock==='function')syncMasterProdukFromStock();if(typeof renderMasterProduk==='function')renderMasterProduk();}catch(e){console.warn('Render sync:',e);}}
+  function showSyncWarning(msg){let el=ui('online-sync-warning');if(!el){el=document.createElement('div');el.id='online-sync-warning';el.style.cssText='position:fixed;left:12px;bottom:12px;z-index:99999;max-width:420px;background:#3f1d1d;border:1px solid #7f1d1d;color:#fecaca;padding:10px 12px;border-radius:10px;font:12px Arial;box-shadow:0 10px 30px rgba(0,0,0,.35)';document.body.appendChild(el);}el.textContent='⚠️ Sinkronisasi: '+msg;el.style.display='block';clearTimeout(window.__syncWarnTimer);window.__syncWarnTimer=setTimeout(()=>{el.style.display='none';},7000);}
+
+  async function saveAllOnline(){return writeCanonicalState('manual');}
 
   async function loadRemoteData(){
     loadingRemote=true;
-    const {data,error}=await db.from('app_data').select('data_key,data').eq('user_id',currentUser.id);
-    if(error){loadingRemote=false;throw error;}
-    const rows=Array.isArray(data)?data:[];
-    const map={}; rows.forEach(r=>{map[r.data_key]=r.data;});
-    for(const key of ARRAY_KEYS){
-      const incoming=map[key];
-      setAppVar(key,Array.isArray(incoming)?incoming:[]);
-    }
-    if(map[SETTINGS_KEY] && typeof map[SETTINGS_KEY]==='object'){
-      onlineSettings={...onlineSettings,...map[SETTINGS_KEY]};
-    }
-    loadingRemote=false;
+    try{
+      const state=await readCanonicalState();
+      applyLocalState(state);
+    }finally{loadingRemote=false;}
   }
 
-  // Override the app's old localStorage-backed helpers.
-  window.getPengaturan=function(){return {...onlineSettings};};
-  window.isPengaturanTerisi=function(){
-    const x=window.getPengaturan();
-    return !!(x.namaUsaha||x.noWa||x.alamat||x.admin||x.mataUang||x.metodeDefault||String(x.stokMin)!==''||x.footerStruk||x.konfirmasiHapus||x.peringatanHarga||x.compact||x.animasi);
-  };
-  window.simpanPengaturan=async function(){
-    const el=id=>document.getElementById(id);
-    onlineSettings={
-      namaUsaha:el('set-nama-usaha')?.value.trim()||'',
-      noWa:el('set-no-wa')?.value.trim()||'',
-      alamat:el('set-alamat')?.value.trim()||'',
-      admin:el('set-admin')?.value.trim()||'',
-      mataUang:el('set-mataUang')?.value||'',
-      metodeDefault:el('set-metode-default')?.value||'',
-      stokMin:el('set-stok-min')?.value===''?'':Math.max(0,Number(el('set-stok-min').value)||0),
-      footerStruk:el('set-footer-struk')?.value.trim()||'',
-      konfirmasiHapus:!!el('set-konfirmasi-hapus')?.checked,
-      peringatanHarga:!!el('set-peringatan-harga')?.checked,
-      compact:!!el('set-compact')?.checked,
-      animasi:!!el('set-animasi')?.checked
-    };
-    await writeRow(SETTINGS_KEY,onlineSettings);
-    updateProfilTokoUI(onlineSettings);
-    if(typeof loadPengaturan==='function')loadPengaturan();
-    if(typeof renderPengaturanStatus==='function')renderPengaturanStatus();
-    alert('Pengaturan berhasil disimpan ke database online.');
-  };
-  window.resetPengaturan=async function(){
-    if(!confirm('Kosongkan pengaturan toko? Data stok, penjualan, pelanggan, biaya, piutang, retur, dan tutup buku tidak akan dihapus.'))return;
-    onlineSettings={
-      namaUsaha:'',noWa:'',alamat:'',admin:'',mataUang:'',metodeDefault:'',
-      stokMin:'',footerStruk:'',konfirmasiHapus:false,peringatanHarga:false,compact:false,animasi:false
-    };
-    await writeRow(SETTINGS_KEY,onlineSettings);
-    if(typeof loadPengaturan==='function')loadPengaturan();
-    alert('Pengaturan toko dikosongkan.');
-  };
+  function startCloudWatcher(){
+    if(cloudWatcherStarted)return;cloudWatcherStarted=true;
+    setInterval(()=>{if(onlineReady&&!loadingRemote&&!applyingRemoteState)ensureProxies();},1000);
+  }
 
-  window.loadPedagangData=function(){ if(typeof syncPedagangFromStock==='function')syncPedagangFromStock(); };
-  window.savePedagangData=function(){ scheduleSave('pedagangData'); };
-  window.loadMutasiStokData=function(){};
-  window.saveMutasiStokData=function(){ scheduleSave('mutasiStokData'); };
+  function startRealtimeSync(){
+    if(stateSyncStarted||!db||!currentUser)return;stateSyncStarted=true;
+    const uid=currentUser.id;
+    stateChannel=db.channel('ismail-store-state-'+uid).on('postgres_changes',{event:'UPDATE',schema:'public',table:'store_state',filter:'user_id=eq.'+uid},payload=>{
+      const row=payload.new;if(!row||row.user_id!==uid)return;
+      const rev=Number(row.revision)||0;
+      if(rev<=stateRevision)return;
+      stateRevision=rev;stateUpdatedAt=row.updated_at||stateUpdatedAt;
+      applyLocalState(row.state||{});ensureProxies();rerenderAfterState();
+    }).on('postgres_changes',{event:'INSERT',schema:'public',table:'store_state',filter:'user_id=eq.'+uid},payload=>{
+      const row=payload.new;if(!row||row.user_id!==uid)return;const rev=Number(row.revision)||0;if(rev<stateRevision)return;stateRevision=rev;stateUpdatedAt=row.updated_at||stateUpdatedAt;applyLocalState(row.state||{});ensureProxies();rerenderAfterState();
+    }).subscribe(status=>console.log('Ismail Store Realtime state:',status));
+  }
+  function stopRealtimeSync(){if(stateChannel&&db){try{db.removeChannel(stateChannel);}catch(e){}}stateChannel=null;stateSyncStarted=false;}
 
-  window.restoreIsmailShop=async function(event){
-    const file=event.target.files?.[0]; if(!file)return;
-    try{
-      const d=JSON.parse(await file.text());
-      if(!d || d.app!=='Ismail Shop')throw new Error('Format backup tidak dikenali');
-      if(!confirm('Restore akan mengganti data aktif dengan isi backup. Lanjutkan?'))return;
-      for(const key of ARRAY_KEYS){
-        if(Array.isArray(d[key])) setAppVar(key,d[key]);
-      }
-      if(d.settings && typeof d.settings==='object') onlineSettings={...onlineSettings,...d.settings};
-      ensureProxies();
-      await saveAllOnline();
-      if(typeof updateMetricsAndRender==='function')updateMetricsAndRender();
-      if(typeof renderDashboard==='function')renderDashboard();
-      if(typeof renderPiutang==='function')renderPiutang();
-      if(typeof renderTutupBuku==='function')renderTutupBuku();
-      if(typeof loadPengaturan==='function')loadPengaturan();
-      if(typeof renderPengaturanStatus==='function')renderPengaturanStatus();
-      alert('Backup berhasil dipulihkan ke database online.');
-    }catch(err){alert('Backup tidak dapat dipulihkan: '+err.message);}
-    event.target.value='';
-  };
+  // Override local-only settings/backup helpers so every change enters the canonical state.
+  window.getPengaturan=()=>({...onlineSettings});
+  window.isPengaturanTerisi=()=>{const x=window.getPengaturan();return !!(x.namaUsaha||x.noWa||x.alamat||x.admin||x.mataUang||x.metodeDefault||String(x.stokMin)!==''||x.footerStruk||x.konfirmasiHapus||x.peringatanHarga||x.compact||x.animasi);};
+  window.simpanPengaturan=async function(){const el=id=>document.getElementById(id);onlineSettings={namaUsaha:el('set-nama-usaha')?.value.trim()||'',noWa:el('set-no-wa')?.value.trim()||'',alamat:el('set-alamat')?.value.trim()||'',admin:el('set-admin')?.value.trim()||'',mataUang:el('set-mataUang')?.value||'',metodeDefault:el('set-metode-default')?.value||'',stokMin:el('set-stok-min')?.value===''?'':Math.max(0,Number(el('set-stok-min').value)||0),footerStruk:el('set-footer-struk')?.value.trim()||'',konfirmasiHapus:!!el('set-konfirmasi-hapus')?.checked,peringatanHarga:!!el('set-peringatan-harga')?.checked,compact:!!el('set-compact')?.checked,animasi:!!el('set-animasi')?.checked};await writeCanonicalState('settings');if(typeof loadPengaturan==='function')loadPengaturan();if(typeof renderPengaturanStatus==='function')renderPengaturanStatus();alert('Pengaturan berhasil disimpan.');};
+  window.resetPengaturan=async function(){if(!confirm('Kosongkan pengaturan toko? Data transaksi tidak akan dihapus.'))return;onlineSettings={namaUsaha:'',noWa:'',alamat:'',admin:'',mataUang:'',metodeDefault:'',stokMin:'',footerStruk:'',konfirmasiHapus:false,peringatanHarga:false,compact:false,animasi:false};await writeCanonicalState('settings-reset');if(typeof loadPengaturan==='function')loadPengaturan();alert('Pengaturan toko dikosongkan.');};
+  window.loadPedagangData=function(){};window.savePedagangData=function(){scheduleStateSave();};window.loadMutasiStokData=function(){};window.saveMutasiStokData=function(){scheduleStateSave();};
+
+  window.restoreIsmailShop=async function(event){const file=event.target.files?.[0];if(!file)return;try{const d=JSON.parse(await file.text());if(!d||d.app!=='Ismail Shop')throw new Error('Format backup tidak dikenali');if(!confirm('Restore akan mengganti seluruh data toko aktif. Lanjutkan?'))return;for(const key of ARRAY_KEYS)if(Array.isArray(d[key]))setAppVar(key,d[key]);if(d.settings&&typeof d.settings==='object')onlineSettings={...onlineSettings,...d.settings};ensureProxies();await writeCanonicalState('restore');rerenderAfterState();alert('Backup berhasil dipulihkan ke database online.');}catch(err){alert('Backup tidak dapat dipulihkan: '+err.message);}event.target.value='';};
+
+  // Backward compatibility: existing code may call scheduleSave(key).
+  function scheduleSave(){scheduleStateSave();}
+  async function writeRow(){return writeCanonicalState('legacy');}
 
   async function loginSubmit(e){
     e.preventDefault();
@@ -4771,6 +4653,7 @@
     }
     onlineReady=true;
     startCloudWatcher();
+    startRealtimeSync();
     // Step 2: enter the app even if one old report/widget renderer has a problem.
     try{
       ensureProxies();
@@ -4801,6 +4684,7 @@
     ui('online-db-auth-form')?.addEventListener('submit',loginSubmit);
     ui('online-db-toggle')?.addEventListener('click',()=>setAuthMode(authMode==='login'?'signup':'login'));
     ui('online-db-logout')?.addEventListener('click',async()=>{
+      stopRealtimeSync();
       await db?.auth.signOut();
       onlineReady=false; currentUser=null; hideUserBar(); showAuth();
     });
@@ -4811,7 +4695,7 @@
     if(session) await enterApp(session.user); else showAuth();
 
     db.auth.onAuthStateChange((event,session)=>{
-      if(event==='SIGNED_OUT'){onlineReady=false;currentUser=null;hideUserBar();showAuth();}
+      if(event==='SIGNED_OUT'){stopRealtimeSync();onlineReady=false;currentUser=null;hideUserBar();showAuth();}
     });
 
     setInterval(ensureProxies,1000);
