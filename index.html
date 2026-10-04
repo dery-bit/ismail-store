@@ -4497,7 +4497,7 @@
   const cfg = window.ISMAIL_SUPABASE_CONFIG || {};
   const configReady = !!(cfg.url && cfg.publishableKey && !String(cfg.url).includes('GANTI_'));
 
-  function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;"}[m]));}
+  function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
   function ui(id){return document.getElementById(id);}
   function showScreen(){ui('online-db-screen')?.classList.remove('hidden');document.body.classList.add('online-db-locked');}
   function hideScreen(){ui('online-db-screen')?.classList.add('hidden');document.body.classList.remove('online-db-locked');}
