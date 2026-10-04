@@ -2480,9 +2480,20 @@
       const konfirmasi = cfg.konfirmasiHapus ? confirm(`Apakah Anda yakin ingin menghapus ${checkboxes.length} produk terpilih?`) : true;
       if (konfirmasi) {
         const idsToDelete = Array.from(checkboxes).map(cb => parseInt(cb.value));
+        const linkedSales = salesData.filter(s => idsToDelete.includes(Number(s.stockId)));
+        const linkedReturns = returnData.filter(r => idsToDelete.includes(Number(r.stockId)));
+        if(linkedSales.length || linkedReturns.length){
+          alert(
+            'PRODUK TIDAK DAPAT DIHAPUS.\n\n' +
+            `Ada ${linkedSales.length} transaksi penjualan dan ${linkedReturns.length} data retur yang masih terhubung ke stok yang dipilih.\n` +
+            'Hapus/perbaiki transaksi terkait terlebih dahulu agar riwayat dan laporan tidak terputus.'
+          );
+          return;
+        }
         stockData = stockData.filter(item => !idsToDelete.includes(item.id));
         document.getElementById('select-all').checked = false;
         updateMetricsAndRender();
+        renderTable();
         alert("Produk berhasil dihapus dari stok.");
       }
     }
@@ -2941,7 +2952,7 @@
       document.getElementById(modalId).classList.add('hidden');
     }
 
-    function handleFormSubmit(e) {
+    async function handleFormSubmit(e) {
       e.preventDefault();
       const id = document.getElementById('form-id').value;
       const produk = document.getElementById('form-produk').value;
@@ -2973,11 +2984,39 @@
 
       const kodeBaru = '000' + (stockData.length + 1);
 
+      if(!produk.trim()){
+        alert('Nama produk wajib diisi.');
+        return;
+      }
+      if(!Number.isInteger(jumlah) || jumlah < 1){
+        alert('Jumlah stok harus minimal 1 unit.');
+        return;
+      }
+      if(!tglBeli){
+        alert('Tanggal pembelian stok wajib diisi.');
+        return;
+      }
+
       if(id) {
         const index = stockData.findIndex(i => i.id == id);
         if(index !== -1) {
+          const existing = stockData[index];
+          const linkedSoldQty = salesData
+            .filter(s => String(s.stockId) === String(existing.id))
+            .reduce((sum,s) => sum + (Number(s.qty)||0), 0);
+          if(jumlah < 1){
+            alert('Stok tidak boleh disimpan dengan jumlah 0.');
+            return;
+          }
+          // Jumlah pada baris stok adalah sisa stok. Jangan izinkan edit
+          // menurunkannya di bawah transaksi yang sudah tercatat.
+          const currentRemaining = Number(existing.jumlah)||0;
+          if(jumlah < currentRemaining && jumlah + linkedSoldQty < linkedSoldQty){
+            alert('Jumlah stok tidak valid karena sudah ada transaksi penjualan yang terhubung.');
+            return;
+          }
           stockData[index] = { 
-            ...stockData[index], 
+            ...existing,
             produk, 
             ram,
             memory,
@@ -2990,7 +3029,8 @@
             hargaJual: hargaJualVal, 
             hargaBeli, 
             barcode: barcodeFinal,
-            serial: barcodeFinal
+            serial: barcodeFinal,
+            status: jumlah > 0 ? 'Tersedia' : 'Terjual'
           };
         }
       } else {
@@ -3275,7 +3315,7 @@
       }
     }
 
-    function handlePenjualanSubmit(e) {
+    async function handlePenjualanSubmit(e) {
       e.preventDefault();
 
       const editId = document.getElementById('edit-sale-id').value;
@@ -3284,197 +3324,183 @@
         alert('TRANSAKSI TIDAK DAPAT DISIMPAN.\n\nTanggal transaksi berada di periode yang sudah ditutup buku. Buka kembali periode tersebut terlebih dahulu jika memang perlu melakukan perubahan.');
         return;
       }
+
       const pelanggan = document.getElementById('sale-pelanggan').value;
       const itemId = document.getElementById('sale-produk-select').value;
-      const qtyRaw = document.getElementById('sale-qty').value;
-      const qty = parseInt(qtyRaw, 10);
+      const qty = parseInt(document.getElementById('sale-qty').value, 10);
       const metode = normalizeMetodePembayaran(document.getElementById('sale-metode').value);
       const saleRam = document.getElementById('sale-ram').value;
       const saleMemory = document.getElementById('sale-memory').value;
       const saleWarna = document.getElementById('sale-warna').value;
       const rawHargaJualCustom = document.getElementById('sale-harga-jual-custom').value;
       const rawPotonganCustom = document.getElementById('sale-potongan-custom').value;
-
       const hargaJualCustom = parseRupiahToNumber(rawHargaJualCustom);
       const potonganCustom = parseRupiahToNumber(rawPotonganCustom);
 
       const errors = [];
-      const warning = [];
-
-      // Validasi data wajib sebelum transaksi menyentuh data stok/penjualan.
-      if (!tglRaw) {
-        errors.push('Tanggal transaksi belum diisi.');
-      }
-
-      if (!pelanggan) {
-        errors.push('Nama pelanggan belum dipilih.');
-      }
-
-      if (!itemId) {
-        errors.push('Produk belum dipilih.');
-      }
-
-      if (!Number.isInteger(qty) || qty < 1) {
-        errors.push('Jumlah beli harus berupa angka minimal 1 unit.');
-      }
-
+      if (!tglRaw) errors.push('Tanggal transaksi belum diisi.');
+      if (!pelanggan) errors.push('Nama pelanggan belum dipilih.');
+      if (!itemId) errors.push('Produk belum dipilih.');
+      if (!Number.isInteger(qty) || qty < 1) errors.push('Jumlah beli harus berupa angka minimal 1 unit.');
       if (rawHargaJualCustom.trim() === '' || !Number.isFinite(hargaJualCustom) || hargaJualCustom <= 0) {
         errors.push('Harga jual harus diisi dan harus lebih dari Rp 0.');
       }
-
       if (rawPotonganCustom.trim() !== '' && (!Number.isFinite(potonganCustom) || potonganCustom < 0)) {
         errors.push('Potongan harga tidak valid. Nominal tidak boleh negatif.');
       }
-
-      if (Number.isFinite(hargaJualCustom) && hargaJualCustom > 0 && Number.isFinite(potonganCustom) && potonganCustom >= 0) {
-        if (potonganCustom > hargaJualCustom) {
-          errors.push('Potongan harga tidak boleh lebih besar dari harga jual.');
-        } else if (potonganCustom === hargaJualCustom) {
-          warning.push('Potongan sama dengan harga jual sehingga total tagihan menjadi Rp 0.');
-        }
+      if (Number.isFinite(hargaJualCustom) && Number.isFinite(potonganCustom) && potonganCustom > hargaJualCustom) {
+        errors.push('Potongan harga tidak boleh lebih besar dari harga jual.');
       }
 
-      let itemStok = itemId ? stockData.find(i => i.id == itemId) : null;
-      let hargaBeli = itemStok ? (Number(itemStok.hargaBeli) || 0) : 0;
+      const itemStok = itemId ? stockData.find(i => String(i.id) === String(itemId)) : null;
+      const oldSale = editId ? salesData.find(s => String(s.id) === String(editId)) : null;
+      const oldStock = oldSale && oldSale.stockId != null
+        ? stockData.find(i => String(i.id) === String(oldSale.stockId))
+        : null;
 
-      if (itemId && !itemStok) {
-        errors.push('Produk yang dipilih tidak ditemukan di data stok. Silakan pilih produk yang masih tersedia.');
+      if (editId && !oldSale) errors.push('Transaksi lama tidak ditemukan.');
+      if (itemId && !itemStok) errors.push('Produk yang dipilih tidak ditemukan di data stok.');
+
+      // Saat transaksi baru, produk wajib benar-benar memiliki stok > 0.
+      // Saat edit, stok lama dari transaksi yang sama boleh dihitung kembali.
+      let available = itemStok ? Math.max(0, Number(itemStok.jumlah) || 0) : 0;
+      if (oldSale && oldSale.stockId != null && String(oldSale.stockId) === String(itemStok?.id)) {
+        available += Math.max(0, Number(oldSale.qty) || 0);
       }
-
       if (itemStok) {
-        const stokSaatIni = Number(itemStok.jumlah);
-        if (!Number.isFinite(stokSaatIni) || stokSaatIni < 0) {
-          errors.push(`Data stok "${itemStok.produk || 'produk ini'}" tidak valid. Periksa jumlah stok terlebih dahulu.`);
-        } else {
-          // Saat mengedit transaksi yang sama, qty lama masih dianggap bagian dari stok
-          // karena transaksi tersebut sudah pernah mengurangi stok.
-          let stokTersediaUntukTransaksi = stokSaatIni;
-          if (editId) {
-            const transaksiLama = salesData.find(s => s.id == editId);
-            if (transaksiLama && transaksiLama.stockId != null && transaksiLama.stockId == itemStok.id) {
-              stokTersediaUntukTransaksi += Number(transaksiLama.qty) || 0;
-            }
-          }
-
-          if (Number.isInteger(qty) && qty > stokTersediaUntukTransaksi) {
-            errors.push(`Stok "${itemStok.produk || 'produk ini'}" tidak mencukupi. Stok yang dapat dijual: ${stokTersediaUntukTransaksi} unit, sedangkan Anda memasukkan ${qty} unit.`);
-          }
+        if (!Number.isFinite(Number(itemStok.jumlah)) || Number(itemStok.jumlah) < 0) {
+          errors.push(`Data stok "${itemStok.produk || 'produk ini'}" tidak valid.`);
         }
-
-        if (hargaBeli <= 0) {
-          errors.push(`Harga modal "${itemStok.produk || 'produk ini'}" belum valid atau masih Rp 0. Periksa data stok sebelum menyimpan transaksi.`);
+        if (available <= 0) {
+          errors.push(`Stok "${itemStok.produk || 'produk ini'}" kosong. Transaksi tidak dapat disimpan.`);
+        }
+        if (!editId && String(itemStok.status || '').toLowerCase() !== 'tersedia') {
+          errors.push(`Produk "${itemStok.produk || 'produk ini'}" berstatus ${itemStok.status || 'tidak tersedia'}. Pilih stok yang berstatus Tersedia.`);
+        }
+        if (Number.isInteger(qty) && qty > available) {
+          errors.push(`Stok "${itemStok.produk || 'produk ini'}" tidak mencukupi. Stok yang dapat dijual: ${available} unit, sedangkan Anda memasukkan ${qty} unit.`);
         }
       }
 
+      const hargaBeli = itemStok ? (Number(itemStok.hargaBeli) || 0) : 0;
       const hargaJualBersih = Math.max(0, hargaJualCustom - (Number.isFinite(potonganCustom) ? potonganCustom : 0));
-
-      if (itemStok && Number.isFinite(hargaJualBersih) && hargaJualBersih > 0 && hargaJualBersih < hargaBeli) {
-        errors.push(`Harga jual bersih ${formatRupiah(hargaJualBersih)} lebih rendah dari harga modal ${formatRupiah(hargaBeli)}. Transaksi akan menyebabkan kerugian.`);
+      if (itemStok && hargaBeli <= 0) errors.push(`Harga modal "${itemStok.produk || 'produk ini'}" belum valid atau masih Rp 0.`);
+      if (itemStok && hargaJualBersih > 0 && hargaJualBersih < hargaBeli) {
+        errors.push(`Harga jual bersih ${formatRupiah(hargaJualBersih)} lebih rendah dari harga modal ${formatRupiah(hargaBeli)}.`);
       }
-
-      if (itemStok && Number.isFinite(hargaJualCustom) && hargaJualCustom > 0) {
+      if (itemStok && hargaJualCustom > 0) {
         const hargaMaster = Number(itemStok.hargaJual) || 0;
-        if (hargaMaster <= 0) {
-          errors.push(`Harga jual master untuk "${itemStok.produk || 'produk ini'}" belum valid. Periksa data stok terlebih dahulu.`);
-        } else if (hargaJualCustom !== hargaMaster) {
-          errors.push(`Harga jual yang dimasukkan ${formatRupiah(hargaJualCustom)} tidak sesuai dengan harga master stok ${formatRupiah(hargaMaster)}. Transaksi tidak dapat disimpan.`);
+        if (hargaMaster <= 0) errors.push(`Harga jual master untuk "${itemStok.produk || 'produk ini'}" belum valid.`);
+        else if (hargaJualCustom !== hargaMaster) {
+          errors.push(`Harga jual yang dimasukkan ${formatRupiah(hargaJualCustom)} tidak sesuai dengan harga master stok ${formatRupiah(hargaMaster)}.`);
         }
       }
 
-      if (errors.length > 0) {
-        const pesan = [
-          'TRANSAKSI TIDAK DAPAT DISIMPAN',
-          '',
-          ...errors.map((x, i) => `${i + 1}. ${x}`)
-        ].join('\n');
-
-        alert(pesan);
-
-        // Fokus otomatis ke bagian pertama yang perlu diperbaiki.
-        if (!itemId) {
-          document.getElementById('sale-produk-select').focus();
-        } else if (!Number.isInteger(qty) || qty < 1) {
-          document.getElementById('sale-qty').focus();
-        } else if (rawHargaJualCustom.trim() === '' || !Number.isFinite(hargaJualCustom) || hargaJualCustom <= 0) {
-          document.getElementById('sale-harga-jual-custom').focus();
-        } else if (itemStok && Number(hargaJualCustom) !== (Number(itemStok.hargaJual) || 0)) {
-          document.getElementById('sale-harga-jual-custom').focus();
-        }
-
+      if (errors.length) {
+        alert(['TRANSAKSI TIDAK DAPAT DISIMPAN','',...errors.map((x,i)=>`${i+1}. ${x}`)].join('\n'));
+        if (!itemId) document.getElementById('sale-produk-select').focus();
+        else if (!Number.isInteger(qty) || qty < 1) document.getElementById('sale-qty').focus();
         return;
       }
 
-      if (warning.length > 0) {
-        const lanjut = confirm(
-          'PERHATIAN SEBELUM MENYIMPAN\n\n' +
-          warning.map((x, i) => `${i + 1}. ${x}`).join('\n') +
-          '\n\nApakah Anda yakin ingin tetap menyimpan transaksi ini?'
-        );
-        if (!lanjut) return;
+      // Jangan izinkan mengedit transaksi yang sudah diretur.
+      const returnedQty = oldSale ? getReturnedQtyForSale(oldSale.id) : 0;
+      if (oldSale && returnedQty > 0) {
+        alert('Transaksi ini sudah memiliki retur. Edit transaksi diblokir agar stok, retur, dan laporan tidak rusak.');
+        return;
       }
 
-      if(editId) {
-        const idx = salesData.findIndex(s => s.id == editId);
-        if(idx !== -1) {
-          salesData[idx].tglRaw = tglRaw;
-          salesData[idx].tanggal = formatDateToIndonesian(tglRaw);
-          const oldCustomerName = salesData[idx].pelanggan || '';
-          salesData[idx].pelanggan = pelanggan;
-          if (pelanggan && pelanggan !== 'Umum' && !customerData.some(c => c.nama.toLowerCase() === pelanggan.toLowerCase())) {
-            customerData.push({id: Date.now(), nama: pelanggan, hp: '', alamat: '', catatan: '', dibuat: tglRaw});
-          }
-          salesData[idx].metode = metode;
-          salesData[idx].hargaJual = hargaJualCustom;
-          salesData[idx].potongan = potonganCustom;
-          salesData[idx].qty = qty;
-          salesData[idx].laba = (hargaJualBersih - salesData[idx].hargaBeli) * qty;
-          const customSpek = [saleMemory, saleRam, saleWarna].filter(Boolean).join('/') || '-';
-          salesData[idx].spek = customSpek;
-          syncPiutangFromSale(salesData[idx]);
-        }
-      } else {
-        let namaProduk = itemStok ? itemStok.produk : "Produk";
-        let spek = [saleMemory, saleRam, saleWarna].filter(Boolean).join('/') || "-";
+      if (editId) {
+        const idx = salesData.findIndex(s => String(s.id) === String(editId));
+        if (idx === -1) return;
 
+        // Kembalikan stok transaksi lama terlebih dahulu.
+        if (oldSale.stockId != null && oldStock) {
+          oldStock.jumlah = Math.max(0, (Number(oldStock.jumlah)||0) + (Number(oldSale.qty)||0));
+          oldStock.status = oldStock.jumlah > 0 ? 'Tersedia' : 'Terjual';
+        }
+
+        // Ambil stok baru sesuai qty terbaru.
+        if (!itemStok || Number(itemStok.jumlah) < qty) {
+          alert('Stok berubah sebelum transaksi disimpan. Silakan buka ulang form dan periksa stok terbaru.');
+          return;
+        }
+        itemStok.jumlah = Math.max(0, (Number(itemStok.jumlah)||0) - qty);
+        itemStok.status = itemStok.jumlah > 0 ? 'Tersedia' : 'Terjual';
+
+        const customSpek = [saleMemory, saleRam, saleWarna].filter(Boolean).join('/') || '-';
+        const oldCustomerName = salesData[idx].pelanggan || '';
+        salesData[idx].tglRaw = tglRaw;
+        salesData[idx].tanggal = formatDateToIndonesian(tglRaw);
+        salesData[idx].pelanggan = pelanggan;
+        salesData[idx].metode = metode;
+        salesData[idx].stockId = itemStok.id;
+        salesData[idx].produk = itemStok.produk || 'Produk';
+        salesData[idx].hargaBeli = hargaBeli;
+        salesData[idx].hargaJual = hargaJualCustom;
+        salesData[idx].potongan = potonganCustom;
+        salesData[idx].qty = qty;
+        salesData[idx].laba = (hargaJualBersih - hargaBeli) * qty;
+        salesData[idx].spek = customSpek;
         if (pelanggan && pelanggan !== 'Umum' && !customerData.some(c => c.nama.toLowerCase() === pelanggan.toLowerCase())) {
-          customerData.push({id: Date.now(), nama: pelanggan, hp: '', alamat: '', catatan: '', dibuat: tglRaw});
+          customerData.push({id: Date.now(), nama: pelanggan, hp:'', alamat:'', catatan:'', dibuat:tglRaw});
         }
-
+        syncPiutangFromSale(salesData[idx]);
+        if (oldCustomerName !== pelanggan && oldCustomerName) syncCustomersFromSales();
+      } else {
         const newSale = {
-          id: salesData.length + 1,
-          stockId: itemStok ? itemStok.id : null,
-          produk: namaProduk,
-          spek: spek,
-          qty: qty,
-          hargaBeli: hargaBeli,
+          id: salesData.length ? Math.max(...salesData.map(s => Number(s.id)||0)) + 1 : 1,
+          stockId: itemStok.id,
+          produk: itemStok.produk || 'Produk',
+          spek: [saleMemory, saleRam, saleWarna].filter(Boolean).join('/') || '-',
+          qty,
+          hargaBeli,
           hargaJual: hargaJualCustom,
           potongan: potonganCustom,
           laba: (hargaJualBersih - hargaBeli) * qty,
           kasir: "Ismail",
           role: "Pemilik",
-          metode: metode,
-          tglRaw: tglRaw,
+          metode,
+          tglRaw,
           tanggal: formatDateToIndonesian(tglRaw),
-          pelanggan: pelanggan
+          pelanggan
         };
-
         salesData.unshift(newSale);
-
-        if(itemStok) {
-          itemStok.jumlah = Math.max(0, itemStok.jumlah - qty);
-          if(itemStok.jumlah === 0) itemStok.status = 'Terjual';
+        itemStok.jumlah = Math.max(0, (Number(itemStok.jumlah)||0) - qty);
+        itemStok.status = itemStok.jumlah > 0 ? 'Tersedia' : 'Terjual';
+        if (pelanggan && pelanggan !== 'Umum' && !customerData.some(c => c.nama.toLowerCase() === pelanggan.toLowerCase())) {
+          customerData.push({id: Date.now(), nama: pelanggan, hp:'', alamat:'', catatan:'', dibuat:tglRaw});
         }
         syncPiutangFromSale(newSale);
       }
 
+      syncCustomersFromSales();
+      syncPedagangFromStock();
+      populatePedagangDatalist();
       closeModal('modal-penjualan');
-      populateDynamicPeriods(); // Perbarui opsi periode jika ada bulan baru yang ditambahkan
+      populateDynamicPeriods();
       renderSalesTable();
       renderPelangganTable();
       renderPiutang();
       updateMetricsAndRender();
+      renderDashboard();
       renderLaporan();
-      alert("Penjualan berhasil dicatat!");
+      if (typeof renderTable === 'function') renderTable();
+
+      // Paksa simpan data penting ke database sebelum memberi status berhasil.
+      try {
+        if (typeof window.__ismailSaveCritical === 'function') {
+          await window.__ismailSaveCritical(['stockData','salesData','customerData','piutangData','piutangPaymentData','pedagangData']);
+        } else if (typeof window.__ismailFlushCloud === 'function') {
+          await window.__ismailFlushCloud(false);
+        }
+      } catch (cloudErr) {
+        console.error('Critical transaction cloud save failed:', cloudErr);
+        alert('TRANSAKSI TIDAK DAPAT DIKONFIRMASI.\n\nPerubahan belum berhasil dipastikan tersimpan ke database online. Jangan ulangi transaksi sebelum koneksi database diperiksa.');
+        return;
+      }
+
+      alert(editId ? "Penjualan berhasil diperbarui dan stok sudah disesuaikan." : "Penjualan berhasil dicatat dan stok sudah dikurangi.");
     }
 
     // ================= FITUR AKSI PENJUALAN =================
@@ -3645,22 +3671,53 @@
       }
     }
 
-    function hapusPenjualan(saleId) {
-      const saleLock = salesData.find(x => x.id === saleId);
-      if (saleLock && isTanggalTutupBuku(saleLock.tglRaw)) {
+    async function hapusPenjualan(saleId) {
+      const saleLock = salesData.find(x => String(x.id) === String(saleId));
+      if (!saleLock) return;
+      if (isTanggalTutupBuku(saleLock.tglRaw)) {
         alert('Transaksi ini berada di periode yang sudah ditutup buku dan tidak dapat dihapus.');
         return;
       }
-      const cfg=getPengaturan();
-      const konfirmasi = cfg.konfirmasiHapus ? confirm("Apakah Anda yakin ingin menghapus catatan transaksi ini?") : true;
-      if(konfirmasi) {
-        salesData = salesData.filter(s => s.id !== saleId);
-        piutangData = piutangData.filter(p => p.saleId !== saleId);
-        piutangPaymentData = piutangPaymentData.filter(p => p.saleId !== saleId);
-        renderSalesTable();
-        renderPiutang();
-        updateMetricsAndRender();
+      if (getReturnedQtyForSale(saleLock.id) > 0) {
+        alert('Transaksi ini sudah memiliki retur dan tidak dapat dihapus langsung. Selesaikan data retur terlebih dahulu.');
+        return;
       }
+      const cfg=getPengaturan();
+      const konfirmasi = cfg.konfirmasiHapus ? confirm("Apakah Anda yakin ingin menghapus catatan transaksi ini? Stok akan dikembalikan.") : true;
+      if(!konfirmasi) return;
+
+      const item = saleLock.stockId != null
+        ? stockData.find(i => String(i.id) === String(saleLock.stockId))
+        : null;
+      if (item) {
+        item.jumlah = Math.max(0, (Number(item.jumlah)||0) + (Number(saleLock.qty)||0));
+        item.status = item.jumlah > 0 ? 'Tersedia' : 'Terjual';
+      }
+
+      salesData = salesData.filter(s => String(s.id) !== String(saleId));
+      piutangData = piutangData.filter(p => String(p.saleId) !== String(saleId));
+      piutangPaymentData = piutangPaymentData.filter(p => String(p.saleId) !== String(saleId));
+
+      syncCustomersFromSales();
+      syncPedagangFromStock();
+      renderSalesTable();
+      renderPelangganTable();
+      renderPiutang();
+      updateMetricsAndRender();
+      renderDashboard();
+      renderLaporan();
+      if (typeof renderTable === 'function') renderTable();
+
+      try {
+        if (typeof window.__ismailSaveCritical === 'function') {
+          await window.__ismailSaveCritical(['stockData','salesData','customerData','piutangData','piutangPaymentData','pedagangData']);
+        }
+      } catch(e) {
+        console.error(e);
+        alert('Penghapusan belum dapat dipastikan tersimpan ke database online. Periksa koneksi sebelum melakukan transaksi berikutnya.');
+        return;
+      }
+      alert("Penjualan berhasil dihapus dan stok dikembalikan.");
     }
 
     function renderSalesTable() {
@@ -4687,10 +4744,21 @@
         if(typeof syncCustomersFromSales==='function')syncCustomersFromSales();
         if(typeof populateCustomerSelect==='function')populateCustomerSelect();
       }
+      if(typeof syncCustomersFromSales==='function' && (key==='salesData'||key==='customerData'))syncCustomersFromSales();
+      if(typeof syncPedagangFromStock==='function' && (key==='stockData'||key==='pedagangData'))syncPedagangFromStock();
+      if(typeof populateCustomerSelect==='function' && (key==='salesData'||key==='customerData'))populateCustomerSelect();
+      if(typeof populateDynamicPeriods==='function' && key==='salesData')populateDynamicPeriods();
+      if(typeof renderTable==='function' && (key==='stockData'||key==='salesData'||key==='returnData'))renderTable();
+      if(typeof renderSalesTable==='function' && (key==='salesData'||key==='potonganData'||key==='returnData'))renderSalesTable();
+      if(typeof renderPelangganTable==='function' && (key==='salesData'||key==='customerData'||key==='piutangData'||key==='returnData'))renderPelangganTable();
+      if(typeof renderPedagangTable==='function' && (key==='stockData'||key==='pedagangData'))renderPedagangTable();
+      if(typeof renderBiayaPage==='function' && key==='biayaData')renderBiayaPage();
+      if(typeof renderPiutang==='function' && (key==='salesData'||key==='piutangData'||key==='piutangPaymentData'))renderPiutang();
+      if(typeof renderTutupBuku==='function' && key==='tutupBukuData')renderTutupBuku();
+      if(typeof renderKontrolStok==='function' && (key==='stockData'||key==='mutasiStokData'))renderKontrolStok();
       if(typeof updateMetricsAndRender==='function')updateMetricsAndRender();
       if(typeof renderDashboard==='function')renderDashboard();
-      if(typeof renderPiutang==='function' && (key==='piutangData'||key==='piutangPaymentData'))renderPiutang();
-      if(typeof renderTutupBuku==='function' && key==='tutupBukuData')renderTutupBuku();
+      if(typeof renderLaporan==='function' && ['stockData','salesData','potonganData','biayaData','returnData','customerData','piutangData','piutangPaymentData','tutupBukuData'].includes(key))renderLaporan();
       if(typeof loadPengaturan==='function' && key===SETTINGS_KEY)loadPengaturan();
     }catch(e){ console.warn('Realtime render warning:',e); }
   }
@@ -4924,6 +4992,19 @@
     }catch(err){showMsg(err.message||'Login gagal.',false);}
     finally{ui('online-db-submit').disabled=false;}
   }
+
+  // Simpan perubahan kritis secara eksplisit sebelum UI menyatakan transaksi berhasil.
+  window.__ismailSaveCritical = async function(keys){
+    if(!onlineReady || !currentUser) throw new Error('Database online belum siap.');
+    const wanted = Array.isArray(keys) && keys.length ? keys : ARRAY_KEYS.concat([SETTINGS_KEY]);
+    for(const key of wanted){
+      if(key===SETTINGS_KEY){
+        await writeRow(SETTINGS_KEY, JSON.parse(JSON.stringify(onlineSettings||{})));
+      }else if(ARRAY_KEYS.includes(key)){
+        await writeRow(key, JSON.parse(JSON.stringify(getAppVar(key)||[])));
+      }
+    }
+  };
 
   async function enterApp(user){
     currentUser=user;
