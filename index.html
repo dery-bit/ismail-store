@@ -1401,7 +1401,7 @@
         <div class="grid grid-cols-3 gap-3">
           <div>
             <label class="block text-gray-400 mb-1">RAM</label>
-            <select id="sale-ram" class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-white focus:outline-none focus:border-yellow-500">
+            <select id="sale-ram" onchange="calculateSaleTotal()" class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-white focus:outline-none focus:border-yellow-500">
               <option value="">- Pilih RAM -</option>
               <option value="2GB">2 GB</option>
               <option value="3GB">3 GB</option>
@@ -1414,7 +1414,7 @@
           </div>
           <div>
             <label class="block text-gray-400 mb-1">Penyimpanan (ROM)</label>
-            <select id="sale-memory" class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-white focus:outline-none focus:border-yellow-500">
+            <select id="sale-memory" onchange="calculateSaleTotal()" class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-white focus:outline-none focus:border-yellow-500">
               <option value="">- Pilih Internal -</option>
               <option value="32GB">32 GB</option>
               <option value="64GB">64 GB</option>
@@ -1426,7 +1426,7 @@
           </div>
           <div>
             <label class="block text-gray-400 mb-1">Warna</label>
-            <input type="text" id="sale-warna" placeholder="Cth: Hitam" class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-white focus:outline-none focus:border-yellow-500">
+            <input type="text" id="sale-warna" onchange="calculateSaleTotal()" placeholder="Cth: Hitam" class="w-full p-2.5 rounded-lg bg-gray-900 border border-gray-700 text-white focus:outline-none focus:border-yellow-500">
           </div>
         </div>
 
@@ -3255,6 +3255,16 @@
           document.getElementById('sale-pelanggan').value = s.pelanggan || 'Umum';
           document.getElementById('sale-metode').value = normalizeMetodePembayaran(s.metode);
           document.getElementById('sale-qty').value = s.qty || 1;
+          if (s.stockId != null) {
+            document.getElementById('sale-produk-select').value = String(s.stockId);
+          }
+          const linkedStock = s.stockId != null
+            ? stockData.find(x => String(x.id) === String(s.stockId))
+            : null;
+          const saleSpecParts = String(s.spek || '').split('/');
+          document.getElementById('sale-ram').value = linkedStock?.ram || saleSpecParts[1] || '';
+          document.getElementById('sale-memory').value = linkedStock?.memory || saleSpecParts[0] || '';
+          document.getElementById('sale-warna').value = linkedStock?.warna || saleSpecParts[2] || '';
           document.getElementById('sale-harga-jual-custom').value = formatRupiahInput(s.hargaJual);
           document.getElementById('sale-potongan-custom').value = formatRupiahInput(s.potongan || 0);
         }
@@ -3268,6 +3278,38 @@
       updateSalePaymentInfo();
       calculateSaleTotal();
       modal.classList.remove('hidden');
+    }
+
+    function normalizeStockSpec(value) {
+      return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '');
+    }
+
+    function validateSaleStockSpecification(item, ram, memory, warna) {
+      if (!item) return ['Produk stok tidak ditemukan.'];
+
+      const selected = {
+        ram: normalizeStockSpec(ram),
+        memory: normalizeStockSpec(memory),
+        warna: normalizeStockSpec(warna)
+      };
+      const stock = {
+        ram: normalizeStockSpec(item.ram),
+        memory: normalizeStockSpec(item.memory),
+        warna: normalizeStockSpec(item.warna)
+      };
+
+      const errors = [];
+      const labels = {ram:'RAM', memory:'Penyimpanan (ROM)', warna:'Warna'};
+
+      Object.keys(labels).forEach(key => {
+        // Spesifikasi pada transaksi WAJIB sama dengan stok yang dipilih.
+        // Jika stok tidak memiliki spesifikasi, transaksi tidak boleh mengarang spesifikasi baru.
+        if (selected[key] !== stock[key]) {
+          errors.push(`${labels[key]} "${selected[key] || '(kosong)'}" tidak tersedia untuk stok "${item.produk || 'produk ini'}". Pilih spesifikasi yang sama dengan data stok.`);
+        }
+      });
+
+      return errors;
     }
 
     function calculateSaleTotal() {
@@ -3302,16 +3344,26 @@
       const hargaJualBersih = Math.max(0, hargaJualCustom - potonganCustom);
       const total = hargaJualBersih * qty;
       const laba = (hargaJualBersih - hargaBeli) * qty;
+      const specErrors = item ? validateSaleStockSpecification(
+        item,
+        document.getElementById('sale-ram')?.value,
+        document.getElementById('sale-memory')?.value,
+        document.getElementById('sale-warna')?.value
+      ) : [];
 
       document.getElementById('sale-total-tagihan').innerText = formatRupiah(total);
       document.getElementById('sale-estimasi-laba').innerText = formatRupiah(laba);
 
-      if (hargaJualBersih < hargaBeli && itemId) {
+      if ((hargaJualBersih < hargaBeli && itemId) || specErrors.length > 0) {
         btnSubmit.disabled = true;
         warningBox.classList.remove('hidden');
+        warningBox.innerHTML = specErrors.length
+          ? '⚠️ ' + specErrors[0]
+          : '⚠️ Harga jual tidak boleh lebih kecil dari harga modal (rugi)!';
       } else {
         btnSubmit.disabled = false;
         warningBox.classList.add('hidden');
+        warningBox.innerHTML = '⚠️ Harga jual tidak boleh lebih kecil dari harga modal (rugi)!';
       }
     }
 
@@ -3360,6 +3412,12 @@
 
       if (editId && !oldSale) errors.push('Transaksi lama tidak ditemukan.');
       if (itemId && !itemStok) errors.push('Produk yang dipilih tidak ditemukan di data stok.');
+
+      // RAM, ROM, dan warna harus benar-benar cocok dengan baris stok yang dipilih.
+      // Jadi pengguna tidak bisa menjual "varian" yang sebenarnya tidak ada di stok.
+      if (itemStok) {
+        errors.push(...validateSaleStockSpecification(itemStok, saleRam, saleMemory, saleWarna));
+      }
 
       // Saat transaksi baru, produk wajib benar-benar memiliki stok > 0.
       // Saat edit, stok lama dari transaksi yang sama boleh dihitung kembali.
