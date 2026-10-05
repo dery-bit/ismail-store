@@ -3698,35 +3698,32 @@
     }
 
     function returPenjualan(saleId) {
-      const idx = salesData.findIndex(s => s.id === saleId);
-      if (idx !== -1 && isTanggalTutupBuku(salesData[idx].tglRaw)) {
-        alert('Transaksi ini berada di periode yang sudah ditutup buku dan tidak dapat diproses retur melalui aksi lama.');
+      const sale = salesData.find(s => String(s.id) === String(saleId));
+      if (!sale) {
+        alert('Data transaksi penjualan tidak ditemukan.');
         return;
       }
-      if(idx === -1) return;
-      const sale = salesData[idx];
+      if (isTanggalTutupBuku(sale.tglRaw)) {
+        alert('Transaksi ini berada di periode yang sudah ditutup buku dan tidak dapat diproses retur.');
+        return;
+      }
 
-      const konfirmasi = confirm(`Apakah Anda yakin ingin melakukan RETUR untuk produk "${sale.produk}"?\nStok barang akan dikembalikan otomatis ke inventaris dan perhitungan laba serta potongan akan direset secara otomatis.`);
-      if(konfirmasi) {
-        if(sale.stockId) {
-          const stokItem = stockData.find(i => i.id === sale.stockId);
-          if(stokItem) {
-            stokItem.jumlah += (sale.qty || 1);
-            stokItem.status = 'Tersedia';
-          }
-        } else {
-          const stokItem = stockData.find(i => i.produk.toLowerCase() === sale.produk.toLowerCase());
-          if(stokItem) {
-            stokItem.jumlah += (sale.qty || 1);
-            stokItem.status = 'Tersedia';
-          }
-        }
+      const sudah = getReturnedQtyForSale(sale.id);
+      const tersedia = Math.max(0, (Number(sale.qty) || 1) - sudah);
+      if (tersedia <= 0) {
+        alert('Transaksi ini sudah seluruhnya diretur.');
+        return;
+      }
 
-        salesData.splice(idx, 1);
-        
-        renderSalesTable();
-        updateMetricsAndRender();
-        alert("Retur berhasil diproses! Stok telah dikembalikan ke inventaris dan seluruh data laba serta potongan otomatis diperbarui.");
+      // Gunakan alur retur yang sama dengan tombol "Catat Retur" di halaman Laporan.
+      // Dengan demikian retur dari Penjualan dan Laporan masuk ke returnData yang sama,
+      // tersimpan ke Supabase, mengembalikan stok bila dipilih, dan langsung tercermin
+      // pada seluruh perhitungan laporan.
+      openReturModal();
+      const select = document.getElementById('retur-sale-select');
+      if (select) {
+        select.value = String(sale.id);
+        prepareReturFromSale();
       }
     }
 
@@ -4437,7 +4434,7 @@
       if(qty>tersedia){alert(`Jumlah retur melebihi sisa unit yang dapat diretur (${tersedia} unit).`);return;}
       const tgl=document.getElementById('retur-tanggal')?.value;
       const masukStok=document.getElementById('retur-masuk-stok')?.checked;
-      const nilaiRefund=Math.max(0,(Number(s.hargaJual)||0-(Number(s.potongan)||0))*qty);
+      const nilaiRefund=Math.max(0,((Number(s.hargaJual)||0)-(Number(s.potongan)||0))*qty);
       const nilaiModal=Math.max(0,(Number(s.hargaBeli)||0)*qty);
       const r={id:Date.now(),saleId:s.id,stockId:s.stockId||null,produk:s.produk||'Produk',spek:s.spek||'-',pelanggan:s.pelanggan||'Umum',qty,hargaJual:Number(s.hargaJual)||0,potongan:Number(s.potongan)||0,hargaBeli:Number(s.hargaBeli)||0,nilaiRefund,tglRaw:tgl,tanggal:formatDateToIndonesian(tgl),alasan:document.getElementById('retur-alasan')?.value||'',kondisi:document.getElementById('retur-kondisi')?.value||'',masukStok,catatan:document.getElementById('retur-catatan')?.value?.trim()||'',nilaiModal};
       const oldReturn=[...returnData],oldStock=stockData.map(x=>({...x}));
