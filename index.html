@@ -792,7 +792,7 @@
             <button onclick="eksporReturCSV()" class="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 px-3 py-1.5 rounded-lg text-[10px] cursor-pointer">📥 Ekspor Retur CSV</button>
           </div>
           <div class="overflow-x-auto"><table class="w-full text-left text-[10px]"><thead class="bg-gray-950/40 text-gray-400"><tr>
-            <th class="p-3">Tanggal</th><th class="p-3">Produk</th><th class="p-3">Pelanggan</th><th class="p-3">Alasan</th><th class="p-3">Kondisi</th><th class="p-3 text-right">Qty</th><th class="p-3 text-right">Refund</th><th class="p-3">Stok Kembali</th>
+            <th class="p-3">Tanggal</th><th class="p-3">Produk</th><th class="p-3">Pelanggan</th><th class="p-3">Kondisi</th><th class="p-3 text-right">Qty</th><th class="p-3 text-right">Refund</th><th class="p-3">Stok Kembali</th>
           </tr></thead><tbody id="laporan-retur-tbody" class="divide-y divide-gray-800"></tbody></table></div>
         </div>
       </div>
@@ -4261,13 +4261,13 @@
       set('lap-retur-unit-2',rows.reduce((a,r)=>a+(Number(r.qty)||0),0));
       set('lap-retur-refund',formatRupiah(rows.reduce((a,r)=>a+(Number(r.nilaiRefund)||0),0)));
       set('lap-retur-restock',rows.filter(r=>r.masukStok).reduce((a,r)=>a+(Number(r.qty)||0),0)+' unit');
-      el.innerHTML=rows.length?rows.map(r=>`<tr><td class="p-3">${r.tanggal||'-'}</td><td class="p-3 font-medium text-white">${r.produk||'-'}</td><td class="p-3">${r.pelanggan||'Umum'}</td><td class="p-3">${r.alasan||'-'}</td><td class="p-3">${r.kondisi||'-'}</td><td class="p-3 text-right text-rose-400">${r.qty||0}</td><td class="p-3 text-right">${formatRupiah(r.nilaiRefund||0)}</td><td class="p-3">${r.masukStok?'<span class="text-emerald-400">Ya</span>':'<span class="text-gray-500">Tidak</span>'}</td></tr>`).join(''):`<tr><td colspan="8" class="p-6 text-center text-gray-500">Belum ada retur pada periode ini.</td></tr>`;
+      el.innerHTML=rows.length?rows.map(r=>`<tr><td class="p-3">${r.tanggal||'-'}</td><td class="p-3 font-medium text-white">${r.produk||'-'}</td><td class="p-3">${r.pelanggan||'Umum'}</td><td class="p-3">${r.kondisi||'-'}</td><td class="p-3 text-right text-rose-400">${r.qty||0}</td><td class="p-3 text-right">${formatRupiah(r.nilaiRefund||0)}</td><td class="p-3">${r.masukStok?'<span class="text-emerald-400">Ya</span>':'<span class="text-gray-500">Tidak</span>'}</td></tr>`).join(''):`<tr><td colspan="7" class="p-6 text-center text-gray-500">Belum ada retur pada periode ini.</td></tr>`;
     }
 
     function eksporReturCSV(){
       const rows=getLaporanReturRows();
-      const header=['Tanggal','Produk','Spesifikasi','Pelanggan','Alasan','Kondisi','Qty','Nilai Refund','Masuk Stok','Catatan'];
-      const data=rows.map(r=>[r.tanggal||'',r.produk||'',r.spek||'',r.pelanggan||'',r.alasan||'',r.kondisi||'',r.qty||0,r.nilaiRefund||0,r.masukStok?'Ya':'Tidak',r.catatan||'']);
+      const header=['Tanggal','Produk','Spesifikasi','Pelanggan','Kondisi','Qty','Nilai Refund','Masuk Stok','Catatan'];
+      const data=rows.map(r=>[r.tanggal||'',r.produk||'',r.spek||'',r.pelanggan||'',r.kondisi||'',r.qty||0,r.nilaiRefund||0,r.masukStok?'Ya':'Tidak',r.catatan||'']);
       const csv='\ufeff'+[header,...data].map(r=>r.map(csvEscape).join(',')).join('\n');
       const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'}),url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`retur-ismail-shop-${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);
     }
