@@ -1686,8 +1686,30 @@
       return normalizeMetodePembayaran(metode) === 'Kredit / Piutang';
     }
 
+    function getNetSaleQty(sale) {
+      if (!sale) return 0;
+      const original = Math.max(0, Number(sale.qty) || 1);
+      const returned = Math.min(original, typeof getReturnedQtyForSale === 'function' ? getReturnedQtyForSale(sale.id) : 0);
+      return Math.max(0, original - returned);
+    }
+
+    function getNetSaleOmzet(sale) {
+      if (!sale) return 0;
+      return Math.max(0, ((Number(sale.hargaJual) || 0) - (Number(sale.potongan) || 0)) * getNetSaleQty(sale));
+    }
+
+    function getNetSaleLaba(sale) {
+      if (!sale) return 0;
+      const originalQty = Math.max(0, Number(sale.qty) || 1);
+      const netQty = getNetSaleQty(sale);
+      const unitLaba = originalQty > 0
+        ? (Number(sale.laba) || (((Number(sale.hargaJual)||0) - (Number(sale.potongan)||0) - (Number(sale.hargaBeli)||0)) * originalQty)) / originalQty
+        : 0;
+      return unitLaba * netQty;
+    }
+
     function getSaleTotalTagihan(sale) {
-      return Math.max(0, ((Number(sale.hargaJual) || 0) - (Number(sale.potongan) || 0)) * (Number(sale.qty) || 1));
+      return getNetSaleOmzet(sale);
     }
 
     function syncPiutangFromSale(sale) {
@@ -3960,7 +3982,7 @@
       modal.innerHTML=`<div style="background:#111827;border:1px solid #374151;border-radius:16px;width:min(980px,96vw);max-height:94vh;overflow:auto;padding:18px;color:white;font-family:Arial,sans-serif;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><strong style="font-size:18px">🧾 Invoice Transaksi #${invoiceEscape(s.id)}</strong><button id="invoice-close" style="background:#374151;color:white;border:0;border-radius:8px;padding:7px 12px;cursor:pointer">✕</button></div>
         <div style="background:white;border-radius:10px;padding:8px;overflow:auto"><img id="invoice-preview-img" style="display:block;width:100%;height:auto"/></div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap"><button id="invoice-wa" style="background:#22c55e;color:white;border:0;border-radius:8px;padding:10px 16px;font-weight:700;cursor:pointer">📲 Kirim ke WA</button><button id="invoice-download" style="background:#84cc16;color:#111827;border:0;border-radius:8px;padding:10px 16px;font-weight:700;cursor:pointer">⬇ Download PNG</button></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button id="invoice-download" style="background:#84cc16;color:#111827;border:0;border-radius:8px;padding:10px 16px;font-weight:700;cursor:pointer">⬇ Download PNG</button></div>
       </div>`;
       document.body.appendChild(modal);
       const svg=buatInvoiceSVG(s);
@@ -3968,22 +3990,11 @@
       const url=URL.createObjectURL(blob);
       const img=document.getElementById('invoice-preview-img'); img.src=url;
       document.getElementById('invoice-close').onclick=()=>{URL.revokeObjectURL(url);modal.remove();};
-      function invoiceToCanvas(done){
+      document.getElementById('invoice-download').onclick=()=>{
         const canvas=document.createElement('canvas'), scale=2; canvas.width=900*scale; canvas.height=760*scale;
         const ctx=canvas.getContext('2d'); const image=new Image();
-        image.onload=()=>{ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,0,0,canvas.width,canvas.height);done(canvas);};
-        image.onerror=()=>alert('Invoice gagal dibuat sebagai gambar.'); image.src=url;
-      }
-      document.getElementById('invoice-download').onclick=()=>{invoiceToCanvas(canvas=>{const a=document.createElement('a');a.download=`Invoice-${s.id}.png`;a.href=canvas.toDataURL('image/png');a.click();});};
-      document.getElementById('invoice-wa').onclick=async()=>{
-        const text=`Invoice #${s.id}\nPelanggan: ${s.pelanggan||'Umum'}\nProduk: ${s.produk||'-'}\nTotal: ${formatRupiah(((Number(s.hargaJual)||0)-(Number(s.potongan)||0))*(Number(s.qty)||1))}`;
-        invoiceToCanvas(canvas=>canvas.toBlob(async blob=>{
-          const file=new File([blob],`Invoice-${s.id}.png`,{type:'image/png'});
-          try{
-            if(navigator.share && navigator.canShare && navigator.canShare({files:[file]})) await navigator.share({title:`Invoice #${s.id}`,text,files:[file]});
-            else {const noWa=String((getPengaturan&&getPengaturan().noWa)||'').replace(/\D/g,'');const target=noWa?(noWa.startsWith('0')?'62'+noWa.slice(1):noWa):'';window.open(target?`https://wa.me/${target}?text=${encodeURIComponent(text)}`:`https://wa.me/?text=${encodeURIComponent(text)}`,'_blank');const a=document.createElement('a');a.download=`Invoice-${s.id}.png`;a.href=canvas.toDataURL('image/png');a.click();alert('WhatsApp dibuka. PNG invoice juga sudah di-download agar bisa dilampirkan.');}
-          }catch(e){if(e.name!=='AbortError')alert('Pengiriman WhatsApp gagal/dibatalkan. Invoice PNG tetap dapat di-download.');}
-        },'image/png'));
+        image.onload=()=>{ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,0,0,canvas.width,canvas.height);URL.revokeObjectURL(url);const a=document.createElement('a');a.download=`Invoice-${s.id}.png`;a.href=canvas.toDataURL('image/png');a.click();};
+        image.src=url;
       };
     }
 
@@ -3991,23 +4002,38 @@
       openPenjualanModal(saleId);
     }
 
-    async function returPenjualan(saleId) {
-      const sale=salesData.find(s=>String(s.id)===String(saleId));
-      if(!sale){alert('Data transaksi penjualan tidak ditemukan.');return;}
-      if(isTanggalTutupBuku(sale.tglRaw)){alert('Transaksi ini berada di periode yang sudah ditutup buku dan tidak dapat diproses retur.');return;}
-      const sudah=getReturnedQtyForSale(sale.id), tersedia=Math.max(0,(Number(sale.qty)||1)-sudah);
-      if(tersedia<=0){alert('Transaksi ini sudah seluruhnya diretur.');return;}
-      const nilaiRefund=Math.max(0,((Number(sale.hargaJual)||0)-(Number(sale.potongan)||0))*tersedia);
-      if(!confirm(`Retur/gagal COD ${tersedia} unit\n\nBarang akan otomatis kembali ke stok.\nOmzet dan laba transaksi ini akan otomatis dikoreksi.\n\nLanjutkan?`))return;
-      const oldReturn=[...returnData],oldStock=stockData.map(x=>({...x})),tgl=biayaToday();
-      const r={id:Date.now(),saleId:sale.id,stockId:sale.stockId||null,produk:sale.produk||'Produk',spek:sale.spek||'-',pelanggan:sale.pelanggan||'Umum',qty:tersedia,hargaJual:Number(sale.hargaJual)||0,potongan:Number(sale.potongan)||0,hargaBeli:Number(sale.hargaBeli)||0,nilaiRefund,tglRaw:tgl,tanggal:formatDateToIndonesian(tgl),alasan:'Gagal COD / transaksi batal',kondisi:'Kembali baik',masukStok:true,catatan:'Retur otomatis dari Penjualan',nilaiModal:Math.max(0,(Number(sale.hargaBeli)||0)*tersedia)};
-      returnData.unshift(r);
-      if(sale.stockId!=null){const item=stockData.find(i=>String(i.id)===String(sale.stockId));if(item){item.jumlah=(Number(item.jumlah)||0)+tersedia;item.status=item.jumlah>0?'Tersedia':'Kosong';}}
-      try{
-        if(typeof window.__ismailSaveCritical==='function')await window.__ismailSaveCritical(['returnData','stockData']);else if(typeof writeRow==='function'){await writeRow('returnData',returnData);await writeRow('stockData',stockData);}
-        updateMetricsAndRender();renderSalesTable();renderDashboard();renderLaporan();if(typeof renderTable==='function')renderTable();
-        alert(`Retur berhasil. ${tersedia} unit kembali ke stok dan omzet/laba sudah dikoreksi sebesar ${formatRupiah(nilaiRefund)}.`);
-      }catch(err){returnData.length=0;returnData.push(...oldReturn);stockData.length=0;stockData.push(...oldStock);console.error(err);alert('Retur gagal disimpan ke database. Perubahan dibatalkan.');}
+    function returPenjualan(saleId) {
+      const sale = salesData.find(s => String(s.id) === String(saleId));
+      if (!sale) {
+        alert('Data transaksi penjualan tidak ditemukan.');
+        return;
+      }
+      if (isTanggalTutupBuku(sale.tglRaw)) {
+        alert('Transaksi ini berada di periode yang sudah ditutup buku dan tidak dapat diproses retur.');
+        return;
+      }
+
+      const sudah = getReturnedQtyForSale(sale.id);
+      const tersedia = Math.max(0, (Number(sale.qty) || 1) - sudah);
+      if (tersedia <= 0) {
+        alert('Transaksi ini sudah seluruhnya diretur.');
+        return;
+      }
+
+      // Retur dari halaman Penjualan diperlakukan sebagai transaksi batal/gagal COD:
+      // barang otomatis kembali ke stok dan omzet/laba dikembalikan ke kondisi sebelum penjualan.
+      openReturModal();
+      const select = document.getElementById('retur-sale-select');
+      if (select) {
+        select.value = String(sale.id);
+        prepareReturFromSale();
+      }
+      const masuk = document.getElementById('retur-masuk-stok');
+      if (masuk) {
+        masuk.checked = true;
+        masuk.disabled = true;
+        masuk.closest('label')?.querySelector('span')?.insertAdjacentText('beforeend',' (otomatis untuk Retur Penjualan)');
+      }
     }
 
     async function hapusPenjualan(saleId) {
@@ -4060,18 +4086,17 @@
     }
 
     function renderSalesTable() {
-      const search = document.getElementById('sales-search-input').value.toLowerCase();
-      const periodValue = document.getElementById('sales-period-select').value;
+      const search = (document.getElementById('sales-search-input')?.value || '').toLowerCase();
+      const periodValue = document.getElementById('sales-period-select')?.value || 'all';
       const tbody = document.getElementById('sales-tbody');
+      if (!tbody) return;
       tbody.innerHTML = '';
 
       const filtered = salesData.filter(s => {
-        const matchesSearch = s.produk.toLowerCase().includes(search) || s.pelanggan.toLowerCase().includes(search);
-        
+        const matchesSearch = String(s.produk || '').toLowerCase().includes(search) ||
+                              String(s.pelanggan || '').toLowerCase().includes(search);
         let matchesPeriod = true;
-        if (periodValue !== 'all' && s.tglRaw) {
-          matchesPeriod = s.tglRaw.startsWith(periodValue);
-        }
+        if (periodValue !== 'all' && s.tglRaw) matchesPeriod = s.tglRaw.startsWith(periodValue);
         return matchesSearch && matchesPeriod;
       });
 
@@ -4081,74 +4106,83 @@
         periodLabelText = periodSelectEl.options[periodSelectEl.selectedIndex].text.replace('📅 ', '');
       }
 
-      document.getElementById('accordion-title-periode').innerText = periodLabelText;
-      document.getElementById('summary-bottom-title').innerText = `Ringkasan ${periodLabelText}`;
+      const titleEl=document.getElementById('accordion-title-periode');
+      const bottomTitle=document.getElementById('summary-bottom-title');
+      if(titleEl) titleEl.innerText=periodLabelText;
+      if(bottomTitle) bottomTitle.innerText=`Ringkasan ${periodLabelText}`;
+
+      let totalKotor = 0;
+      let totalPotonganTransaksi = 0;
+
+      filtered.forEach(s => {
+        const originalQty = Math.max(0, Number(s.qty) || 1);
+        const netQty = getNetSaleQty(s);
+        const returnedQty = Math.max(0, originalQty - netQty);
+        const unitPotongan = Math.max(0, Number(s.potongan) || 0);
+        const netPotongan = unitPotongan * netQty;
+        const netLaba = getNetSaleLaba(s);
+
+        totalKotor += netLaba;
+        totalPotonganTransaksi += netPotongan;
+
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-gray-800/30";
+        const statusHtml = returnedQty > 0
+          ? `<div class="text-[9px] text-amber-400 font-semibold">🔄 Retur ${returnedQty}/${originalQty} unit${netQty===0?' • dibatalkan':''}</div>`
+          : '';
+
+        tr.innerHTML = `
+          <td class="p-3 font-semibold text-white">${s.produk || '-'} <div class="text-[9px] text-gray-400">${s.tanggal || ''}</div>${statusHtml}</td>
+          <td class="p-3 text-yellow-300/80 font-medium">${s.spek || '-'}</td>
+          <td class="p-3">${formatRupiah(s.hargaBeli)}</td>
+          <td class="p-3">${formatRupiah(s.hargaJual)}</td>
+          <td class="p-3 text-rose-400 font-medium">${netPotongan ? formatRupiah(netPotongan) : '-'}</td>
+          <td class="p-3 text-emerald-400 font-bold">${formatRupiah(netLaba)}</td>
+          <td class="p-3">${s.kasir || '-'} (${s.role || '-'})</td>
+          <td class="p-3 text-right">
+            <div class="inline-flex items-center gap-2 bg-gray-900 border border-gray-800 px-2 py-1 rounded-lg">
+              <button onclick="cetakStrukPenjualan(${s.id})" title="Cetak / Kirim Struk" class="text-blue-400 hover:text-blue-300 cursor-pointer">🖨️ Struk</button>
+              <span class="text-gray-700">|</span>
+              <button onclick="tampilkanInvoicePenjualan(${s.id})" title="Lihat & Download Invoice PNG" class="text-emerald-400 hover:text-emerald-300 cursor-pointer">🧾 Invoice</button>
+              <span class="text-gray-700">|</span>
+              <button onclick="editPenjualan(${s.id})" title="Edit Transaksi" class="text-yellow-400 hover:text-yellow-300 cursor-pointer">✏️ Edit</button>
+              <span class="text-gray-700">|</span>
+              <button onclick="returPenjualan(${s.id})" title="Retur Barang (Gagal COD / Transaksi dibatalkan)" class="text-amber-400 hover:text-amber-300 font-bold cursor-pointer">🔄 Retur</button>
+              <span class="text-gray-700">|</span>
+              <button onclick="hapusPenjualan(${s.id})" title="Hapus Transaksi" class="text-red-400 hover:text-red-300 cursor-pointer">🗑️ Hapus</button>
+            </div>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      const set0 = id => { const e=document.getElementById(id); if(e) e.innerText=formatRupiah(0); };
+      const totalBersihHitung = totalKotor - totalPotonganTransaksi;
 
       if (filtered.length === 0) {
         tbody.innerHTML = `<tr><td colspan="8" class="p-4 text-center text-gray-500">Belum ada transaksi penjualan pada periode ini.</td></tr>`;
-        
-        document.getElementById('sales-metric-laba-kotor').innerText = formatRupiah(0);
-        document.getElementById('sales-metric-potongan').innerText = formatRupiah(0);
-        document.getElementById('sales-metric-laba-bersih').innerText = formatRupiah(0);
-        document.getElementById('daily-kotor').innerText = formatRupiah(0);
-        document.getElementById('daily-bersih').innerText = formatRupiah(0);
-        document.getElementById('subtotal-laba-kotor').innerText = formatRupiah(0);
-        document.getElementById('daily-laba-akhir').innerText = formatRupiah(0);
-        document.getElementById('summary-bottom-kotor').innerText = formatRupiah(0);
-        document.getElementById('summary-bottom-potongan').innerText = formatRupiah(0);
-        document.getElementById('summary-bottom-bersih').innerText = formatRupiah(0);
+        ['sales-metric-laba-kotor','sales-metric-potongan','sales-metric-laba-bersih','daily-kotor','daily-bersih','subtotal-laba-kotor','daily-laba-akhir','summary-bottom-kotor','summary-bottom-potongan','summary-bottom-bersih'].forEach(set0);
       } else {
-        let totalKotor = 0;
-        let totalPotonganTransaksi = 0;
-
-        filtered.forEach(s => {
-          totalKotor += s.laba;
-          totalPotonganTransaksi += (s.potongan || 0);
-          const tr = document.createElement('tr');
-          tr.className = "hover:bg-gray-800/30";
-          tr.innerHTML = `
-            <td class="p-3 font-semibold text-white">${s.produk} <div class="text-[9px] text-gray-400">${s.tanggal || ''}</div></td>
-            <td class="p-3 text-yellow-300/80 font-medium">${s.spek}</td>
-            <td class="p-3">${formatRupiah(s.hargaBeli)}</td>
-            <td class="p-3">${formatRupiah(s.hargaJual)}</td>
-            <td class="p-3 text-rose-400 font-medium">${s.potongan ? formatRupiah(s.potongan) : '-'}</td>
-            <td class="p-3 text-emerald-400 font-bold">${formatRupiah(s.laba)}</td>
-            <td class="p-3">${s.kasir} (${s.role})</td>
-            <td class="p-3 text-right">
-              <div class="inline-flex items-center gap-2 bg-gray-900 border border-gray-800 px-2 py-1 rounded-lg">
-                <button onclick="cetakStrukPenjualan(${s.id})" title="Cetak / Kirim Struk" class="text-blue-400 hover:text-blue-300 cursor-pointer">🖨️ Struk</button>
-                <span class="text-gray-700">|</span>
-                <button onclick="tampilkanInvoicePenjualan(${s.id})" title="Lihat, Download PNG & Kirim ke WhatsApp" class="text-emerald-400 hover:text-emerald-300 cursor-pointer">🧾 Invoice</button>
-                <span class="text-gray-700">|</span>
-                <button onclick="editPenjualan(${s.id})" title="Edit Transaksi" class="text-yellow-400 hover:text-yellow-300 cursor-pointer">✏️ Edit</button>
-                <span class="text-gray-700">|</span>
-                <button onclick="returPenjualan(${s.id})" title="Retur Barang (Kembali ke Stok)" class="text-amber-400 hover:text-amber-300 font-bold cursor-pointer">🔄 Retur</button>
-                <span class="text-gray-700">|</span>
-                <button onclick="hapusPenjualan(${s.id})" title="Hapus Transaksi" class="text-red-400 hover:text-red-300 cursor-pointer">🗑️ Hapus</button>
-              </div>
-            </td>
-          `;
-          tbody.appendChild(tr);
-        });
-
-        const totalBersihHitung = totalKotor - totalPotonganTransaksi;
-
-        document.getElementById('sales-metric-laba-kotor').innerText = formatRupiah(totalKotor);
-        document.getElementById('sales-metric-potongan').innerText = formatRupiah(totalPotonganTransaksi);
-        document.getElementById('sales-metric-laba-bersih').innerText = formatRupiah(totalBersihHitung);
-        document.getElementById('daily-kotor').innerText = formatRupiah(totalKotor);
-        document.getElementById('daily-bersih').innerText = formatRupiah(totalBersihHitung);
-        document.getElementById('subtotal-laba-kotor').innerText = formatRupiah(totalKotor);
-        document.getElementById('daily-laba-akhir').innerText = formatRupiah(totalBersihHitung);
-        document.getElementById('summary-bottom-kotor').innerText = formatRupiah(totalKotor);
-        document.getElementById('summary-bottom-potongan').innerText = formatRupiah(totalPotonganTransaksi);
-        document.getElementById('summary-bottom-bersih').innerText = formatRupiah(totalBersihHitung);
+        const vals={
+          'sales-metric-laba-kotor':totalKotor,'sales-metric-potongan':totalPotonganTransaksi,
+          'sales-metric-laba-bersih':totalBersihHitung,'daily-kotor':totalKotor,
+          'daily-bersih':totalBersihHitung,'subtotal-laba-kotor':totalKotor,
+          'daily-laba-akhir':totalBersihHitung,'summary-bottom-kotor':totalKotor,
+          'summary-bottom-potongan':totalPotonganTransaksi,'summary-bottom-bersih':totalBersihHitung
+        };
+        Object.entries(vals).forEach(([id,v])=>{const e=document.getElementById(id);if(e)e.innerText=formatRupiah(v);});
       }
 
-      document.getElementById('daily-trx-count').innerText = `${filtered.length} transaksi`;
-      document.getElementById('summary-bottom-trx').innerText = filtered.length;
-      document.getElementById('sales-metric-hari-aktif').innerText = filtered.length > 0 ? "1 hari" : "0 hari";
-      document.getElementById('sales-metric-trx-sub').innerText = `${filtered.length} transaksi`;
+      const count = filtered.reduce((a,s)=>a+getNetSaleQty(s),0);
+      const txCount = filtered.filter(s=>getNetSaleQty(s)>0).length;
+      const dailyCount=document.getElementById('daily-trx-count');
+      const bottomTrx=document.getElementById('summary-bottom-trx');
+      const hari=document.getElementById('sales-metric-hari-aktif');
+      const sub=document.getElementById('sales-metric-trx-sub');
+      if(dailyCount) dailyCount.innerText=`${count} unit / ${txCount} transaksi aktif`;
+      if(bottomTrx) bottomTrx.innerText=txCount;
+      if(hari) hari.innerText=txCount>0 ? "1 hari" : "0 hari";
+      if(sub) sub.innerText=`${txCount} transaksi aktif`;
     }
 
     function toggleAccordion(id) {
@@ -4260,15 +4294,15 @@
     }
 
     function renderDashboard() {
-      const omzet = salesData.reduce((sum, s) => sum + ((Number(s.hargaJual) || 0) * (Number(s.qty) || 1)), 0);
-      const labaPenjualan = salesData.reduce((sum, s) => sum + (Number(s.laba) || 0), 0);
+      const omzet = salesData.reduce((sum, s) => sum + getNetSaleOmzet(s), 0);
+      const labaPenjualan = salesData.reduce((sum, s) => sum + getNetSaleLaba(s), 0);
       const totalBiaya = biayaData.reduce((sum, b) => sum + (Number(b.nominal) || 0), 0);
       const labaBersih = labaPenjualan - totalBiaya;
       const stokTersedia = stockData.filter(i => i.status === 'Tersedia');
       const stokUnit = stokTersedia.reduce((sum, i) => sum + (Number(i.jumlah) || 0), 0);
       const nilaiStok = stokTersedia.reduce((sum, i) => sum + ((Number(i.hargaBeli) || 0) * (Number(i.jumlah) || 0)), 0);
       const setMin=getPengaturan().stokMin; const batasStok=String(setMin)===''?0:Number(setMin)||0; const stokMenipis = stokTersedia.filter(i => Number(i.jumlah) <= batasStok);
-      const unitTerjual = salesData.reduce((sum, s) => sum + (Number(s.qty) || 1), 0);
+      const unitTerjual = salesData.reduce((sum, s) => sum + getNetSaleQty(s), 0);
 
       const set = (id, value) => { const el = document.getElementById(id); if (el) el.innerText = value; };
       set('dash-omzet', formatRupiah(omzet));
@@ -4705,7 +4739,7 @@
       const sudah=getReturnedQtyForSale(s.id), tersedia=Math.max(0,laporanQty(s)-sudah);
       if(qty>tersedia){alert(`Jumlah retur melebihi sisa unit yang dapat diretur (${tersedia} unit).`);return;}
       const tgl=document.getElementById('retur-tanggal')?.value;
-      const masukStok=document.getElementById('retur-masuk-stok')?.checked;
+      const masukStok=true;
       const nilaiRefund=Math.max(0,((Number(s.hargaJual)||0)-(Number(s.potongan)||0))*qty);
       const nilaiModal=Math.max(0,(Number(s.hargaBeli)||0)*qty);
       const r={id:Date.now(),saleId:s.id,stockId:s.stockId||null,produk:s.produk||'Produk',spek:s.spek||'-',pelanggan:s.pelanggan||'Umum',qty,hargaJual:Number(s.hargaJual)||0,potongan:Number(s.potongan)||0,hargaBeli:Number(s.hargaBeli)||0,nilaiRefund,tglRaw:tgl,tanggal:formatDateToIndonesian(tgl),alasan:document.getElementById('retur-alasan')?.value||'',kondisi:document.getElementById('retur-kondisi')?.value||'',masukStok,catatan:document.getElementById('retur-catatan')?.value?.trim()||'',nilaiModal};
@@ -4713,10 +4747,25 @@
       returnData.unshift(r);
       if(masukStok&&s.stockId){const item=stockData.find(i=>String(i.id)===String(s.stockId));if(item){item.jumlah=(Number(item.jumlah)||0)+qty;item.status='Tersedia';}}
       try{
-        if(typeof window.__ismailSaveCritical==='function') await window.__ismailSaveCritical(['returnData','stockData']);
-        else { if(typeof writeRow==='function'){await writeRow('returnData',returnData);await writeRow('stockData',stockData);} }
-        closeModal('modal-retur'); updateMetricsAndRender(); renderDashboard(); renderLaporan();
-        alert(`Retur berhasil dicatat: ${qty} unit — ${formatRupiah(nilaiRefund)}.`);
+        // Jika transaksi kredit/piutang, retur juga langsung mengurangi kewajiban pelanggan.
+        if (typeof syncPiutangFromSale === 'function') syncPiutangFromSale(s);
+
+        if(typeof window.__ismailSaveCritical==='function') await window.__ismailSaveCritical(['returnData','stockData','piutangData']);
+        else {
+          if(typeof writeRow==='function'){
+            await writeRow('returnData',returnData);
+            await writeRow('stockData',stockData);
+            await writeRow('piutangData',piutangData);
+          }
+        }
+        closeModal('modal-retur');
+        renderSalesTable();
+        updateMetricsAndRender();
+        renderDashboard();
+        renderLaporan();
+        if(typeof renderPelangganTable==='function') renderPelangganTable();
+        if(typeof renderKontrolStok==='function') renderKontrolStok();
+        alert(`Retur berhasil dicatat: ${qty} unit. Transaksi dibatalkan dari omzet/laba dan ${qty} unit otomatis kembali ke stok.`);
       }catch(err){
         returnData.length=0;returnData.push(...oldReturn);stockData.length=0;stockData.push(...oldStock);
         console.error('Gagal menyimpan retur',err);alert('Retur tidak disimpan karena gagal tersambung ke database. Perubahan dibatalkan.');
@@ -5121,7 +5170,6 @@
       renderMasterProduk();
       switchView('dashboard');
     };
-  setTimeout(async()=>{if(new URLSearchParams(location.search).get('reset-data')!=='1')return;const ok=await resetDataOperasionalUntukMulaiBaru();if(ok){history.replaceState(null,'',location.pathname);alert('Data operasional berhasil dikosongkan. Aplikasi siap digunakan dari awal.');}},4500);
   </script>
 
 <script id="online-database-bridge">
@@ -5325,27 +5373,6 @@
 
     // Sinkronisasi penuh berkala sebagai pengaman tambahan.
     setInterval(()=>{flushCloudChanges(true);},15000);
-  }
-
-  function eksporReturCSV(){
-    const rows=typeof laporanFilteredRetur==='function'?laporanFilteredRetur():returnData;
-    const out=[['Tanggal','Produk','Pelanggan','Qty','Nilai Refund','Alasan','Kondisi','Masuk Stok']];
-    rows.forEach(r=>out.push([r.tanggal||r.tglRaw||'',r.produk||'',r.pelanggan||'Umum',Number(r.qty)||0,Number(r.nilaiRefund)||0,r.alasan||'',r.kondisi||'',r.masukStok?'Ya':'Tidak']));
-    const csv='\ufeff'+out.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
-    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download=`retur-ismail-store-${biayaToday()}.csv`;a.click();URL.revokeObjectURL(url);
-  }
-
-  // ================= DATA AWAL SIAP PAKAI =================
-  async function resetDataOperasionalUntukMulaiBaru(){
-    stockData=[];salesData=[];potonganData=[];biayaData=[];returnData=[];customerData=[];piutangData=[];piutangPaymentData=[];tutupBukuData=[];pedagangData=[];mutasiStokData=[];
-    if(typeof masterProdukData!=='undefined')masterProdukData=[];
-    const keys=['stockData','salesData','potonganData','biayaData','returnData','customerData','piutangData','piutangPaymentData','tutupBukuData','pedagangData','mutasiStokData'];
-    try{
-      if(typeof window.__ismailSaveCritical==='function')await window.__ismailSaveCritical(keys);else if(typeof writeRow==='function')for(const k of keys)await writeRow(k,[]);
-      if(typeof masterProdukData!=='undefined'){if(typeof window.__ismailSaveCritical==='function')await window.__ismailSaveCritical(['masterProdukData']);else if(typeof writeRow==='function')await writeRow('masterProdukData',[]);}
-      try{localStorage.removeItem('ismail_shop_pedagang_v1');localStorage.removeItem('ismail_shop_mutasi_stok_v1');}catch(e){}
-      if(typeof syncPedagangFromStock==='function')syncPedagangFromStock();if(typeof updateMetricsAndRender==='function')updateMetricsAndRender();if(typeof renderSalesTable==='function')renderSalesTable();if(typeof renderDashboard==='function')renderDashboard();if(typeof renderLaporan==='function')renderLaporan();if(typeof renderPelangganTable==='function')renderPelangganTable();if(typeof renderPiutang==='function')renderPiutang();if(typeof renderTutupBuku==='function')renderTutupBuku();if(typeof renderKontrolStok==='function')renderKontrolStok();if(typeof renderTable==='function')renderTable();return true;
-    }catch(e){console.error('Reset data awal online gagal:',e);return false;}
   }
 
   // ===== REALTIME SYNC =====
