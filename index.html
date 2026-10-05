@@ -2440,12 +2440,13 @@
       `).join('');
     }
 
-    function handleRestockSubmit(e) {
+    async function handleRestockSubmit(e) {
       e.preventDefault();
       const id = parseInt(document.getElementById('restock-id').value);
       const tambahJumlah = parseInt(document.getElementById('restock-tambah-jumlah').value) || 0;
       
       const itemIndex = stockData.findIndex(i => i.id === id);
+      const oldStockSnapshot = stockData.map(x => ({...x}));
       if(itemIndex !== -1) {
         stockData[itemIndex].jumlah += tambahJumlah;
         stockData[itemIndex].status = 'Tersedia';
@@ -2459,8 +2460,18 @@
         }
       }
 
+      try {
+        if (typeof window.__ismailSaveCritical === 'function') await window.__ismailSaveCritical(['stockData']);
+        else if (typeof writeRow === 'function') await writeRow('stockData', stockData);
+      } catch (err) {
+        stockData = oldStockSnapshot;
+        console.error('Restock cloud save failed:', err);
+        alert('Restock gagal disimpan ke database online. Perubahan dibatalkan.');
+        return;
+      }
       closeModal('modal-restock');
       updateMetricsAndRender();
+      renderTable();
       alert(`Berhasil melakukan restock! Stok produk bertambah sebanyak ${tambahJumlah} unit.`);
     }
 
@@ -2469,7 +2480,7 @@
       checkboxes.forEach(cb => cb.checked = masterCheckbox.checked);
     }
 
-    function hapusTerpilih() {
+    async function hapusTerpilih() {
       const checkboxes = document.querySelectorAll('.item-checkbox:checked');
       if (checkboxes.length === 0) {
         alert("Pilih setidaknya satu produk yang ingin dihapus terlebih dahulu.");
@@ -2490,7 +2501,17 @@
           );
           return;
         }
+        const oldStock = [...stockData];
         stockData = stockData.filter(item => !idsToDelete.includes(item.id));
+        try {
+          if (typeof window.__ismailSaveCritical === 'function') await window.__ismailSaveCritical(['stockData']);
+          else if (typeof writeRow === 'function') await writeRow('stockData', stockData);
+        } catch (err) {
+          stockData = oldStock;
+          console.error('Stock delete cloud save failed:', err);
+          alert('Penghapusan stok gagal disimpan ke database online.');
+          return;
+        }
         document.getElementById('select-all').checked = false;
         updateMetricsAndRender();
         renderTable();
@@ -2533,16 +2554,73 @@
       document.body.removeChild(link);
     }
 
+    function getNetSoldQtyForStock(stockId) {
+      const sold = salesData.filter(s => String(s.stockId) === String(stockId))
+        .reduce((sum, s) => sum + (Number(s.qty) || 0), 0);
+      const returned = returnData.filter(r => String(r.stockId) === String(stockId))
+        .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+      return Math.max(0, sold - returned);
+    }
+
+    function normalizeStockStatuses() {
+      stockData.forEach(item => {
+        const qty = Number(item.jumlah) || 0;
+        item.status = qty > 0 ? 'Tersedia' : 'Terjual';
+      });
+    }
+
+    function getStockSoldRows() {
+      const rows = [];
+      const seen = new Set();
+      salesData.forEach(s => {
+        if (s.stockId == null || seen.has(String(s.id))) return;
+        const netQty = getNetSoldQtyForStock(s.stockId);
+        if (netQty <= 0) return;
+        const item = stockData.find(i => String(i.id) === String(s.stockId));
+        const base = item || {};
+        rows.push({
+          ...base,
+          id: base.id != null ? base.id : `sale-${s.id}`,
+          kode: base.kode || s.kode || `TRX-${s.id}`,
+          produk: base.produk || s.produk || 'Produk',
+          varian: base.varian || s.varian || '-',
+          ram: base.ram || '', memory: base.memory || '', warna: base.warna || '',
+          barcode: base.barcode || base.serial || s.imei || '',
+          pedagang: base.pedagang || s.pedagang || '-',
+          tgl: base.tgl || s.tglRaw || '', tglTeks: base.tglTeks || s.tanggal || '',
+          hargaBeli: Number(base.hargaBeli ?? s.hargaBeli) || 0,
+          hargaJual: Number(base.hargaJual ?? s.hargaJual) || 0,
+          jumlah: netQty, status: 'Terjual', __soldView: true, stockId: s.stockId
+        });
+        seen.add(String(s.id));
+      });
+      // Jika satu stok memiliki beberapa transaksi, gabungkan menjadi satu baris per stok.
+      const grouped = new Map();
+      rows.forEach(r => {
+        const key = String(r.stockId ?? r.id);
+        if (!grouped.has(key)) grouped.set(key, r);
+      });
+      return Array.from(grouped.values());
+    }
+
+    function getStockRowsForCurrentFilter() {
+      normalizeStockStatuses();
+      if (currentFilter === 'Terjual') return getStockSoldRows();
+      if (currentFilter === 'Tersedia') return stockData.filter(i => (Number(i.jumlah) || 0) > 0);
+      return stockData;
+    }
+
     function updateMetricsAndRender() {
+      normalizeStockStatuses();
       const totalBarang = stockData.reduce((acc, curr) => acc + (parseInt(curr.jumlah) || 0), 0);
-      const tersediaData = stockData.filter(i => i.status === 'Tersedia');
-      const terjualData = stockData.filter(i => i.status === 'Terjual');
+      const tersediaData = stockData.filter(i => (Number(i.jumlah) || 0) > 0);
+      const terjualData = getStockSoldRows();
 
       const totalTersedia = tersediaData.reduce((acc, curr) => acc + (parseInt(curr.jumlah) || 0), 0);
       const totalTerjual = terjualData.reduce((acc, curr) => acc + (parseInt(curr.jumlah) || 0), 0);
 
-      const nilaiStokTersedia = tersediaData.reduce((acc, curr) => acc + (curr.hargaBeli * (parseInt(curr.jumlah) || 1)), 0);
-      const nilaiStokTotal = stockData.reduce((acc, curr) => acc + (curr.hargaBeli * (parseInt(curr.jumlah) || 1)), 0);
+      const nilaiStokTersedia = tersediaData.reduce((acc, curr) => acc + ((Number(curr.hargaBeli) || 0) * (parseInt(curr.jumlah) || 0)), 0);
+      const nilaiStokTotal = stockData.reduce((acc, curr) => acc + ((Number(curr.hargaBeli) || 0) * (parseInt(curr.jumlah) || 0)), 0);
 
       const rataRataHarga = totalBarang > 0 ? (nilaiStokTotal / totalBarang) : 0;
 
@@ -2573,11 +2651,13 @@
     }
 
     function renderTable() {
+      normalizeStockStatuses();
       const search = document.getElementById('search-input').value.toLowerCase();
       const tbody = document.getElementById('stock-tbody');
       tbody.innerHTML = '';
 
-      const filtered = stockData.filter(item => {
+      const sourceRows = getStockRowsForCurrentFilter();
+      const filtered = sourceRows.filter(item => {
         const matchesFilter = currentFilter === 'Semua' || item.status === currentFilter;
         const barcodeVal = item.barcode || item.serial || '';
         const matchesSearch = item.produk.toLowerCase().includes(search) || 
@@ -2622,10 +2702,12 @@
           <td class="p-3">${typeof item.hargaJual === 'number' ? formatRupiah(item.hargaJual) : item.hargaJual}</td>
           <td class="p-3">${statusBadge}</td>
           <td class="p-3 text-center space-x-1">
-            <button onclick="openRestockModal(${item.id})" title="Restock" class="hover:text-emerald-400 cursor-pointer">🔄</button>
-            <button onclick="viewDetail(${item.id})" title="Detail" class="hover:text-blue-400 cursor-pointer">📄</button>
-            <button onclick="openFormModal(${item.id})" title="Edit" class="hover:text-yellow-400 cursor-pointer">✏</button>
-            <button onclick="deleteItem(${item.id}, '${item.produk}')" title="Hapus" class="hover:text-red-400 cursor-pointer">🗑</button>
+            ${item.__soldView
+              ? `<button onclick="viewDetail(${item.id})" title="Detail" class="hover:text-blue-400 cursor-pointer">📄</button><span title="Riwayat penjualan ditampilkan dari data transaksi" class="text-gray-600">🔗</span>`
+              : `<button onclick="openRestockModal(${item.id})" title="Restock" class="hover:text-emerald-400 cursor-pointer">🔄</button>
+                 <button onclick="viewDetail(${item.id})" title="Detail" class="hover:text-blue-400 cursor-pointer">📄</button>
+                 <button onclick="openFormModal(${item.id})" title="Edit" class="hover:text-yellow-400 cursor-pointer">✏</button>
+                 <button onclick="deleteItem(${item.id}, '${item.produk}')" title="Hapus" class="hover:text-red-400 cursor-pointer">🗑</button>`}
           </td>
         `;
         tbody.appendChild(tr);
