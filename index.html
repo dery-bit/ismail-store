@@ -1018,10 +1018,10 @@
 
       <!-- Tab Filter -->
       <div class="flex gap-2 border-b border-gray-800 pb-2">
-        <button id="filter-all" onclick="setFilter('Semua')" class="px-3 py-1 text-xs rounded-lg bg-gray-800 text-white font-medium border border-gray-700 cursor-pointer">Semua (0)</button>
-        <button id="filter-tersedia" onclick="setFilter('Tersedia')" class="px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer">Tersedia (0)</button>
-        <button id="filter-kosong" onclick="setFilter('Kosong')" class="px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer">Kosong (0)</button>
-        <button id="filter-terjual" onclick="setFilter('Terjual')" class="px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer">Terjual (0)</button>
+        <button type="button" id="filter-all" onclick="setFilter('Semua')" class="px-3 py-1 text-xs rounded-lg bg-gray-800 text-white font-medium border border-gray-700 cursor-pointer">Semua (0)</button>
+        <button type="button" id="filter-tersedia" onclick="setFilter('Tersedia')" class="px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer">Tersedia (0)</button>
+        <button type="button" id="filter-kosong" onclick="setFilter('Kosong')" class="px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer">Kosong (0)</button>
+        <button type="button" id="filter-terjual" onclick="setFilter('Terjual')" class="px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer">Terjual (0)</button>
       </div>
 
       <!-- Input Pencarian -->
@@ -2312,16 +2312,40 @@
     }
 
     function setFilter(filter) {
+      const allowed = ['Semua', 'Tersedia', 'Kosong', 'Terjual'];
+      if (!allowed.includes(filter)) filter = 'Semua';
+
       currentFilter = filter;
-      ['Semua', 'Tersedia', 'Kosong', 'Terjual'].forEach(f => {
+
+      allowed.forEach(f => {
         const btn = document.getElementById(`filter-${f.toLowerCase()}`);
-        if(f === filter) {
-          btn.className = "px-3 py-1 text-xs rounded-lg bg-gray-800 text-white font-medium border border-gray-700 cursor-pointer";
-        } else {
-          btn.className = "px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer";
-        }
+        if (!btn) return;
+
+        const active = f === filter;
+        btn.className = active
+          ? "px-3 py-1 text-xs rounded-lg bg-gray-800 text-white font-medium border border-gray-700 cursor-pointer"
+          : "px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer";
+
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
       });
+
+      // Render ulang hanya tabel stok. Data, transaksi, dan fitur lain tidak diubah.
       renderTable();
+    }
+
+    // Pastikan tab stok selalu memiliki state aktif yang benar saat halaman dibuka.
+    function initStockFilterTabs() {
+      const allowed = ['Semua', 'Tersedia', 'Kosong', 'Terjual'];
+      const active = allowed.includes(currentFilter) ? currentFilter : 'Semua';
+      allowed.forEach(f => {
+        const btn = document.getElementById(`filter-${f.toLowerCase()}`);
+        if (!btn) return;
+        const isActive = f === active;
+        btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        btn.className = isActive
+          ? "px-3 py-1 text-xs rounded-lg bg-gray-800 text-white font-medium border border-gray-700 cursor-pointer"
+          : "px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer";
+      });
     }
 
     function setJenisBarang(jenis) {
@@ -2606,13 +2630,24 @@
 
     function getStockRowsForCurrentFilter() {
       normalizeStockStatuses();
-      if (currentFilter === 'Terjual') return getStockSoldRows();
-      if (currentFilter === 'Tersedia') return stockData.filter(i => (Number(i.jumlah) || 0) > 0);
-      if (currentFilter === 'Kosong') return stockData.filter(i => (Number(i.jumlah) || 0) <= 0);
+
+      if (currentFilter === 'Terjual') {
+        return getStockSoldRows();
+      }
+
+      if (currentFilter === 'Tersedia') {
+        return stockData.filter(i => (Number(i.jumlah) || 0) > 0);
+      }
+
+      if (currentFilter === 'Kosong') {
+        return stockData.filter(i => (Number(i.jumlah) || 0) <= 0);
+      }
+
       return stockData;
     }
 
     function updateMetricsAndRender() {
+      initStockFilterTabs();
       normalizeStockStatuses();
       const totalBarang = stockData.reduce((acc, curr) => acc + (parseInt(curr.jumlah) || 0), 0);
       const tersediaData = stockData.filter(i => (Number(i.jumlah) || 0) > 0);
@@ -2664,20 +2699,35 @@
         // sourceRows sudah disaring oleh tab. Jangan menyaring lagi berdasarkan status stok lama,
         // karena Terjual dihitung dari transaksi dan Kosong dari jumlah stok.
         const matchesFilter = true;
-        const barcodeVal = item.barcode || item.serial || '';
-        const matchesSearch = item.produk.toLowerCase().includes(search) || 
-                              item.kode.toLowerCase().includes(search) ||
-                              item.varian.toLowerCase().includes(search) ||
+        const barcodeVal = String(item.barcode || item.serial || '');
+        const produkVal = String(item.produk || '');
+        const kodeVal = String(item.kode || '');
+        const varianVal = String(item.varian || '');
+        const ramVal = String(item.ram || '');
+        const memoryVal = String(item.memory || '');
+        const warnaVal = String(item.warna || '');
+        const pedagangVal = String(item.pedagang || '');
+
+        const matchesSearch = produkVal.toLowerCase().includes(search) ||
+                              kodeVal.toLowerCase().includes(search) ||
+                              varianVal.toLowerCase().includes(search) ||
                               barcodeVal.toLowerCase().includes(search) ||
-                              (item.ram && item.ram.toLowerCase().includes(search)) ||
-                              (item.memory && item.memory.toLowerCase().includes(search)) ||
-                              (item.warna && item.warna.toLowerCase().includes(search)) ||
-                              (item.pedagang && item.pedagang.toLowerCase().includes(search));
+                              ramVal.toLowerCase().includes(search) ||
+                              memoryVal.toLowerCase().includes(search) ||
+                              warnaVal.toLowerCase().includes(search) ||
+                              pedagangVal.toLowerCase().includes(search);
         return matchesFilter && matchesSearch;
       });
 
       if (filtered.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="13" class="p-4 text-center text-gray-500">Tidak ada data stok ditemukan.</td></tr>`;
+        const emptyMessages = {
+          'Semua': 'Belum ada data stok ditemukan.',
+          'Tersedia': 'Belum ada stok yang tersedia.',
+          'Kosong': 'Belum ada stok yang kosong.',
+          'Terjual': 'Belum ada barang yang terjual.'
+        };
+        const msg = emptyMessages[currentFilter] || 'Tidak ada data stok ditemukan.';
+        tbody.innerHTML = `<tr><td colspan="13" class="p-4 text-center text-gray-500">${msg}</td></tr>`;
         return;
       }
 
