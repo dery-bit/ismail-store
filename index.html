@@ -4427,6 +4427,194 @@
       w.document.close();
     }
 
+    async function handleReturSubmit(e){
+      e.preventDefault();
+      const saleId=document.getElementById('retur-sale-select')?.value;
+      const s=salesData.find(x=>String(x.id)===String(saleId));
+      const qty=Number(document.getElementById('retur-qty')?.value)||0;
+      if(!s||qty<=0){alert('Pilih transaksi dan jumlah retur terlebih dahulu.');return;}
+      const sudah=getReturnedQtyForSale(s.id), tersedia=Math.max(0,laporanQty(s)-sudah);
+      if(qty>tersedia){alert(`Jumlah retur melebihi sisa unit yang dapat diretur (${tersedia} unit).`);return;}
+      const tgl=document.getElementById('retur-tanggal')?.value;
+      const masukStok=document.getElementById('retur-masuk-stok')?.checked;
+      const nilaiRefund=Math.max(0,(Number(s.hargaJual)||0-(Number(s.potongan)||0))*qty);
+      const nilaiModal=Math.max(0,(Number(s.hargaBeli)||0)*qty);
+      const r={id:Date.now(),saleId:s.id,stockId:s.stockId||null,produk:s.produk||'Produk',spek:s.spek||'-',pelanggan:s.pelanggan||'Umum',qty,hargaJual:Number(s.hargaJual)||0,potongan:Number(s.potongan)||0,hargaBeli:Number(s.hargaBeli)||0,nilaiRefund,tglRaw:tgl,tanggal:formatDateToIndonesian(tgl),alasan:document.getElementById('retur-alasan')?.value||'',kondisi:document.getElementById('retur-kondisi')?.value||'',masukStok,catatan:document.getElementById('retur-catatan')?.value?.trim()||'',nilaiModal};
+      const oldReturn=[...returnData],oldStock=stockData.map(x=>({...x}));
+      returnData.unshift(r);
+      if(masukStok&&s.stockId){const item=stockData.find(i=>String(i.id)===String(s.stockId));if(item){item.jumlah=(Number(item.jumlah)||0)+qty;item.status='Tersedia';}}
+      try{
+        if(typeof window.__ismailSaveCritical==='function') await window.__ismailSaveCritical(['returnData','stockData']);
+        else { if(typeof writeRow==='function'){await writeRow('returnData',returnData);await writeRow('stockData',stockData);} }
+        closeModal('modal-retur'); updateMetricsAndRender(); renderDashboard(); renderLaporan();
+        alert(`Retur berhasil dicatat: ${qty} unit — ${formatRupiah(nilaiRefund)}.`);
+      }catch(err){
+        returnData.length=0;returnData.push(...oldReturn);stockData.length=0;stockData.push(...oldStock);
+        console.error('Gagal menyimpan retur',err);alert('Retur tidak disimpan karena gagal tersambung ke database. Perubahan dibatalkan.');
+      }
+    }
+
+    /* ================= LAPORAN TERPADU V5 =================
+       Hanya memperbaiki modul Laporan. Data sumber tetap salesData,
+       biayaData, returnData, stockData, customerData dan piutangData.
+       Semua tombol/filter memakai sumber yang sama agar angka konsisten.
+    */
+    function laporanReturMap(rows){
+      const map={};
+      rows.forEach(r=>{
+        const id=String(r.saleId||'');
+        if(!id)return;
+        if(!map[id]) map[id]={qty:0,refund:0,modal:0};
+        map[id].qty += Math.max(0,Number(r.qty)||0);
+        map[id].refund += Math.max(0,Number(r.nilaiRefund)||0);
+        map[id].modal += Math.max(0,Number(r.nilaiModal)||((Number(r.hargaBeli)||0)*(Number(r.qty)||0)));
+      });
+      return map;
+    }
+    function laporanFilteredRetur(){
+      const dari=document.getElementById('laporan-dari')?.value||'';
+      const sampai=document.getElementById('laporan-sampai')?.value||'';
+      const metode=document.getElementById('laporan-metode')?.value||'Semua';
+      const cari=(document.getElementById('laporan-cari')?.value||'').trim().toLowerCase();
+      return returnData.filter(r=>{
+        const t=laporanTanggalRaw(r);
+        if(dari && (!t || t<dari))return false;
+        if(sampai && (!t || t>sampai))return false;
+        if(metode!=='Semua'){
+          const sale=salesData.find(s=>String(s.id)===String(r.saleId));
+          if(!sale || normalizeMetodePembayaran(sale.metode)!==metode)return false;
+        }
+        if(cari){
+          const sale=salesData.find(s=>String(s.id)===String(r.saleId));
+          const hay=`${r.produk||''} ${r.pelanggan||''} ${r.alasan||''} ${r.catatan||''} ${sale?.spek||''} ${sale?.kasir||''}`.toLowerCase();
+          if(!hay.includes(cari))return false;
+        }
+        return true;
+      });
+    }
+    function laporanSaleRows(){
+      const dari=document.getElementById('laporan-dari')?.value||'';
+      const sampai=document.getElementById('laporan-sampai')?.value||'';
+      const metode=document.getElementById('laporan-metode')?.value||'Semua';
+      const cari=(document.getElementById('laporan-cari')?.value||'').trim().toLowerCase();
+      const returns=laporanFilteredRetur();
+      const rmap=laporanReturMap(returns);
+      return salesData.filter(s=>{
+        const t=laporanTanggalRaw(s);
+        if(dari && (!t || t<dari))return false;
+        if(sampai && (!t || t>sampai))return false;
+        if(metode!=='Semua' && normalizeMetodePembayaran(s.metode)!==metode)return false;
+        if(cari){
+          const hay=`${s.produk||''} ${s.pelanggan||''} ${s.spek||''} ${s.kasir||''}`.toLowerCase();
+          if(!hay.includes(cari))return false;
+        }
+        const sold=laporanQty(s);
+        const ret=Math.min(sold,rmap[String(s.id)]?.qty||0);
+        return sold-ret>0;
+      }).map(s=>{
+        const r=rmap[String(s.id)]||{qty:0,refund:0,modal:0};
+        const originalQty=laporanQty(s);
+        const returnedQty=Math.min(originalQty,r.qty||0);
+        const netQty=Math.max(0,originalQty-returnedQty);
+        const harga=laporanHargaJual(s), pot=laporanPotonganUnit(s), modal=laporanHargaBeli(s);
+        const net={...s, qty:netQty};
+        net.__returnQty=returnedQty;
+        net.__returnRefund=Math.min(r.refund||0,(harga-pot)*returnedQty);
+        net.__returnModal=Math.min(r.modal||modal*returnedQty,modal*returnedQty);
+        net.__returnLaba=net.__returnRefund-net.__returnModal;
+        net.__originalQty=originalQty;
+        return net;
+      });
+    }
+    function laporanBiayaRows(){
+      const dari=document.getElementById('laporan-dari')?.value||'';
+      const sampai=document.getElementById('laporan-sampai')?.value||'';
+      const metode=document.getElementById('laporan-metode')?.value||'Semua';
+      return biayaData.filter(b=>{
+        const t=laporanTanggalRaw(b);
+        if(dari && (!t || t<dari))return false;
+        if(sampai && (!t || t>sampai))return false;
+        if(metode!=='Semua' && normalizeMetodePembayaran(b.metode)!==metode)return false;
+        return true;
+      });
+    }
+    function getLaporanRows(){return laporanSaleRows();}
+    function getLaporanReturRows(){return laporanFilteredRetur();}
+
+    function renderLaporan(){
+      const rows=laporanSaleRows();
+      const returRows=laporanFilteredRetur();
+      const originalRows=rows.map(s=>({...s,qty:s.__originalQty||laporanQty(s)}));
+      const omzetKotorSales=rows.reduce((a,s)=>a+laporanOmzetKotor(s),0);
+      const potonganSales=rows.reduce((a,s)=>a+laporanPotongan(s),0);
+      const omzetBersihSales=rows.reduce((a,s)=>a+laporanOmzetBersih(s),0);
+      const labaSales=rows.reduce((a,s)=>a+laporanLaba(s),0);
+      const returnRefund=returRows.reduce((a,r)=>a+Math.max(0,Number(r.nilaiRefund)||0),0);
+      const returnModal=returRows.reduce((a,r)=>a+Math.max(0,Number(r.nilaiModal)||((Number(r.hargaBeli)||0)*(Number(r.qty)||0))),0);
+      const returnQty=returRows.reduce((a,r)=>a+Math.max(0,Number(r.qty)||0),0);
+      const biaya=laporanBiayaRows().reduce((a,b)=>a+Math.max(0,Number(b.nominal)||0),0);
+      const omzetKotor=Math.max(0,omzetKotorSales-returnRefund);
+      const omzetBersih=Math.max(0,omzetBersihSales-returnRefund);
+      const laba=Math.max(0,labaSales-(returnRefund-returnModal));
+      const unit=rows.reduce((a,s)=>a+laporanQty(s),0);
+      const labaBersih=laba-biaya;
+      const set=(id,v)=>{const e=document.getElementById(id);if(e)e.innerText=v;};
+      set('lap-trx',rows.length); set('lap-unit',unit); set('lap-omzet-kotor',formatRupiah(omzetKotor));
+      set('lap-potongan',formatRupiah(potonganSales)); set('lap-omzet-bersih',formatRupiah(omzetBersih));
+      set('lap-laba',formatRupiah(laba)); set('lap-biaya',formatRupiah(biaya)); set('lap-laba-bersih',formatRupiah(labaBersih));
+      set('lap-retur-unit',returnQty); set('lap-retur-nilai',formatRupiah(returnRefund));
+      const dari=document.getElementById('laporan-dari')?.value||'', sampai=document.getElementById('laporan-sampai')?.value||'';
+      set('laporan-periode-label',dari||sampai?`${dari||'Awal data'} s/d ${sampai||'Sekarang'}`:'Semua periode');
+      const detail=document.getElementById('laporan-detail-tbody');
+      if(detail)detail.innerHTML=rows.length?rows.map(s=>`<tr class="hover:bg-gray-900/50"><td class="p-3">${s.tanggal||'-'}</td><td class="p-3 font-medium text-white">${s.produk||'-'}</td><td class="p-3 text-gray-400">${s.pelanggan||'Umum'}</td><td class="p-3">${normalizeMetodePembayaran(s.metode)}</td><td class="p-3 text-right">${laporanQty(s)}</td><td class="p-3 text-right">${formatRupiah(laporanOmzetKotor(s))}</td><td class="p-3 text-right text-rose-400">${formatRupiah(laporanPotongan(s))}</td><td class="p-3 text-right font-medium">${formatRupiah(laporanOmzetBersih(s))}</td><td class="p-3 text-right text-emerald-400">${formatRupiah(laporanLaba(s))}</td></tr>`).join(''):`<tr><td colspan="9" class="p-6 text-center text-gray-500">Belum ada transaksi pada filter ini.</td></tr>`;
+      renderLaporanPenjualan(rows); renderLaporanProduk(rows); renderLaporanPembayaran(rows); renderLaporanPelanggan(rows); renderLaporanStok();
+      renderLaporanRetur(returRows); renderLaporanPaymentSummary(rows); renderLaporanChart(rows);
+    }
+    function renderLaporanPenjualan(rows){
+      const el=document.getElementById('laporan-penjualan-tbody');if(!el)return;
+      el.innerHTML=rows.length?rows.map(s=>`<tr class="hover:bg-gray-900/50"><td class="p-3">${s.tanggal||'-'}</td><td class="p-3 text-white">${s.produk||'-'}</td><td class="p-3 text-gray-400">${s.spek||'-'}</td><td class="p-3">${s.pelanggan||'Umum'}</td><td class="p-3">${s.kasir||'-'}</td><td class="p-3">${normalizeMetodePembayaran(s.metode)}</td><td class="p-3 text-right">${laporanQty(s)}</td><td class="p-3 text-right">${formatRupiah(laporanHargaBeli(s)*laporanQty(s))}</td><td class="p-3 text-right">${formatRupiah(laporanOmzetKotor(s))}</td><td class="p-3 text-right text-rose-400">${formatRupiah(laporanPotongan(s))}</td><td class="p-3 text-right text-emerald-400">${formatRupiah(laporanLaba(s))}</td></tr>`).join(''):`<tr><td colspan="11" class="p-6 text-center text-gray-500">Tidak ada data.</td></tr>`;
+    }
+    function renderLaporanProduk(rows){
+      const map={};rows.forEach(s=>{const k=s.produk||'Produk';if(!map[k])map[k]={trx:0,unit:0,omzet:0,modal:0,laba:0};map[k].trx++;map[k].unit+=laporanQty(s);map[k].omzet+=laporanOmzetBersih(s);map[k].modal+=laporanHargaBeli(s)*laporanQty(s);map[k].laba+=laporanLaba(s);});
+      const el=document.getElementById('laporan-produk-tbody');if(!el)return;const arr=Object.entries(map).sort((a,b)=>b[1].omzet-a[1].omzet);el.innerHTML=arr.length?arr.map(([k,v],i)=>`<tr><td class="p-3">${i+1}</td><td class="p-3 font-medium text-white">${k}</td><td class="p-3 text-right">${v.trx}</td><td class="p-3 text-right">${v.unit}</td><td class="p-3 text-right">${formatRupiah(v.omzet)}</td><td class="p-3 text-right">${formatRupiah(v.modal)}</td><td class="p-3 text-right text-emerald-400">${formatRupiah(v.laba)}</td></tr>`).join(''):`<tr><td colspan="7" class="p-6 text-center text-gray-500">Tidak ada data.</td></tr>`;
+    }
+    function renderLaporanPembayaran(rows){
+      const map={};rows.forEach(s=>{const k=normalizeMetodePembayaran(s.metode);if(!map[k])map[k]={trx:0,unit:0,omzet:0,potongan:0,laba:0};map[k].trx++;map[k].unit+=laporanQty(s);map[k].omzet+=laporanOmzetKotor(s);map[k].potongan+=laporanPotongan(s);map[k].laba+=laporanLaba(s);});
+      const el=document.getElementById('laporan-pembayaran-tbody');if(!el)return;const arr=Object.entries(map);el.innerHTML=arr.length?arr.map(([k,v])=>`<tr><td class="p-3 text-white">${k}</td><td class="p-3 text-right">${v.trx}</td><td class="p-3 text-right">${v.unit}</td><td class="p-3 text-right">${formatRupiah(v.omzet)}</td><td class="p-3 text-right text-rose-400">${formatRupiah(v.potongan)}</td><td class="p-3 text-right">${formatRupiah(v.omzet-v.potongan)}</td><td class="p-3 text-right text-emerald-400">${formatRupiah(v.laba)}</td></tr>`).join(''):`<tr><td colspan="7" class="p-6 text-center text-gray-500">Tidak ada data.</td></tr>`;
+    }
+    function renderLaporanPelanggan(rows){
+      const map={};rows.forEach(s=>{const k=s.pelanggan||'Umum';if(!map[k])map[k]={trx:0,unit:0,total:0,laba:0};map[k].trx++;map[k].unit+=laporanQty(s);map[k].total+=laporanOmzetBersih(s);map[k].laba+=laporanLaba(s);});
+      const el=document.getElementById('laporan-pelanggan-tbody');if(!el)return;const arr=Object.entries(map).sort((a,b)=>b[1].total-a[1].total);el.innerHTML=arr.length?arr.map(([k,v])=>`<tr><td class="p-3 text-white">${k}</td><td class="p-3 text-right">${v.trx}</td><td class="p-3 text-right">${v.unit}</td><td class="p-3 text-right">${formatRupiah(v.total)}</td><td class="p-3 text-right text-emerald-400">${formatRupiah(v.laba)}</td></tr>`).join(''):`<tr><td colspan="5" class="p-6 text-center text-gray-500">Tidak ada data.</td></tr>`;
+    }
+    function renderLaporanPaymentSummary(rows){
+      const el=document.getElementById('laporan-payment-summary');if(!el)return;const map={};rows.forEach(s=>{const k=normalizeMetodePembayaran(s.metode);if(!map[k])map[k]={trx:0,total:0};map[k].trx++;map[k].total+=laporanOmzetBersih(s);});el.innerHTML=Object.entries(map).length?Object.entries(map).map(([k,v])=>`<div class="p-3 flex justify-between"><span class="text-gray-300">${k}<small class="block text-gray-500">${v.trx} transaksi</small></span><strong class="text-white">${formatRupiah(v.total)}</strong></div>`).join(''):`<div class="p-4 text-gray-500 text-[11px]">Belum ada transaksi.</div>`;
+    }
+    function renderLaporanChart(rows){
+      const canvas=document.getElementById('laporan-chart');if(!canvas||typeof Chart==='undefined')return;const map={};rows.forEach(s=>{const k=laporanTanggalRaw(s).substring(0,7)||'Tanpa tanggal';if(!map[k])map[k]={omzet:0,laba:0};map[k].omzet+=laporanOmzetBersih(s);map[k].laba+=laporanLaba(s);});const keys=Object.keys(map).sort().slice(-12);if(laporanChart)laporanChart.destroy();laporanChart=new Chart(canvas.getContext('2d'),{type:'bar',data:{labels:keys.length?keys:['Belum ada data'],datasets:[{label:'Omzet Bersih',data:keys.map(k=>map[k].omzet),borderWidth:1},{label:'Laba',data:keys.map(k=>map[k].laba),borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#cbd5e1',font:{size:10}}}},scales:{x:{ticks:{color:'#94a3b8',font:{size:9}}},y:{ticks:{color:'#94a3b8',font:{size:9},callback:v=>'Rp '+Number(v).toLocaleString('id-ID')}}}}});
+    }
+    function eksporLaporanCSV(){
+      const rows=laporanSaleRows(),returRows=laporanFilteredRetur(),biaya=laporanBiayaRows();
+      const header=['Tanggal','Produk','Spesifikasi','Pelanggan','Kasir','Metode','Qty','Harga Beli','Harga Jual','Potongan','Total Bersih','Laba'];
+      const data=rows.map(s=>[s.tanggal||'',s.produk||'',s.spek||'',s.pelanggan||'Umum',s.kasir||'',normalizeMetodePembayaran(s.metode),laporanQty(s),laporanHargaBeli(s)*laporanQty(s),laporanHargaJual(s)*laporanQty(s),laporanPotongan(s),laporanOmzetBersih(s),laporanLaba(s)]);
+      const csvParts=[header,...data];
+      csvParts.push([]);csvParts.push(['RETUR','','','','','','Qty','','','','Nilai Refund','']);
+      returRows.forEach(r=>csvParts.push([r.tanggal||'',r.produk||'',r.spek||'',r.pelanggan||'Umum','','',Number(r.qty)||0,'','','',Number(r.nilaiRefund)||0,'']));
+      csvParts.push([]);csvParts.push(['BIAYA','','','','','','','','','','Nominal','']);
+      biaya.forEach(b=>csvParts.push([b.tanggal||'',b.ket||'',b.kategori||'',b.metode||'','','','','','','','',Number(b.nominal)||0]));
+      const csv='\ufeff'+csvParts.map(r=>r.map(csvEscape).join(',')).join('\n');
+      const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'}),url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`laporan-ismail-shop-${new Date().toISOString().slice(0,10)}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }
+    function cetakLaporan(){
+      const rows=laporanSaleRows(),returRows=laporanFilteredRetur(),biaya=laporanBiayaRows();
+      const omzet=rows.reduce((a,s)=>a+laporanOmzetBersih(s),0)-returRows.reduce((a,r)=>a+Number(r.nilaiRefund||0),0);
+      const laba=rows.reduce((a,s)=>a+laporanLaba(s),0)-returRows.reduce((a,r)=>a+(Number(r.nilaiRefund||0)-Number(r.nilaiModal||0)),0);
+      const biayaTotal=biaya.reduce((a,b)=>a+Number(b.nominal||0),0);
+      const w=window.open('','_blank','width=1100,height=760');if(!w){alert('Popup diblokir browser. Izinkan popup untuk mencetak laporan.');return;}
+      const detail=rows.map(s=>`<tr><td>${s.tanggal||'-'}</td><td>${s.produk||'-'}</td><td>${s.pelanggan||'Umum'}</td><td>${normalizeMetodePembayaran(s.metode)}</td><td class="num">${laporanQty(s)}</td><td class="num">${formatRupiah(laporanOmzetBersih(s))}</td><td class="num">${formatRupiah(laporanLaba(s))}</td></tr>`).join('');
+      const retd=returRows.map(r=>`<tr><td>${r.tanggal||'-'}</td><td>${r.produk||'-'}</td><td>${r.pelanggan||'Umum'}</td><td class="num">${Number(r.qty)||0}</td><td class="num">${formatRupiah(r.nilaiRefund||0)}</td></tr>`).join('');
+      w.document.write(`<html><head><title>Laporan Ismail Shop</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#111}h1{margin-bottom:4px}.meta{color:#555;font-size:12px}table{width:100%;border-collapse:collapse;margin-top:12px;font-size:11px}th,td{border:1px solid #ddd;padding:7px;text-align:left}th{background:#f2f2f2}.num{text-align:right}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:18px}.card{border:1px solid #ddd;padding:10px;font-weight:bold}.section{margin-top:24px}</style></head><body><h1>ISMAIL SHOP - LAPORAN</h1><div class="meta">Periode: ${document.getElementById('laporan-periode-label')?.innerText||'Semua periode'} | Dicetak: ${new Date().toLocaleString('id-ID')}</div><div class="summary"><div class="card">Transaksi: ${rows.length}</div><div class="card">Unit: ${rows.reduce((a,s)=>a+laporanQty(s),0)}</div><div class="card">Omzet Bersih: ${formatRupiah(omzet)}</div><div class="card">Laba Bersih: ${formatRupiah(laba-biayaTotal)}</div></div><table><thead><tr><th>Tanggal</th><th>Produk</th><th>Pelanggan</th><th>Metode</th><th>Qty</th><th>Total</th><th>Laba</th></tr></thead><tbody>${detail||'<tr><td colspan="7">Tidak ada data</td></tr>'}</tbody></table><div class="section"><h3>Retur</h3><table><thead><tr><th>Tanggal</th><th>Produk</th><th>Pelanggan</th><th>Qty</th><th>Refund</th></tr></thead><tbody>${retd||'<tr><td colspan="5">Tidak ada retur</td></tr>'}</tbody></table></div><script>window.onload=()=>window.print();<\/script></body></html>`);w.document.close();
+    }
+
     // ================= FITUR GRAFIK =================
     let grafikCharts = {};
     let grafikPeriode = 'bulan';
@@ -4928,41 +5116,6 @@
     loadingRemote=false;
   }
 
-  // Reset awal sekali: akun yang memakai file versi "aplikasi baru" ini
-  // akan dimulai tanpa data stok/penjualan/test lama. Marker disimpan di
-  // database agar reset tidak dijalankan lagi pada HP/komputer berikutnya.
-  async function ensureFreshStoreOnce(){
-    const markerKey='__ismail_fresh_store_v1';
-    const {data:markerRows,error:markerError}=await db
-      .from('app_data')
-      .select('data')
-      .eq('user_id',currentUser.id)
-      .eq('data_key',markerKey)
-      .limit(1);
-    if(markerError) throw markerError;
-    if(Array.isArray(markerRows) && markerRows.length && markerRows[0]?.data?.initialized===true){
-      return false;
-    }
-
-    const emptySettings={
-      namaUsaha:'',noWa:'',alamat:'',admin:'',mataUang:'',metodeDefault:'',
-      stokMin:'',footerStruk:'',konfirmasiHapus:false,peringatanHarga:false,
-      compact:false,animasi:false
-    };
-
-    // Kosongkan seluruh data operasional, termasuk data contoh/test.
-    for(const key of ARRAY_KEYS){
-      setAppVar(key,[]);
-      await writeRow(key,[]);
-    }
-    onlineSettings={...emptySettings};
-    await writeRow(SETTINGS_KEY,emptySettings);
-
-    await writeRow(markerKey,{initialized:true,initializedAt:new Date().toISOString()});
-    cloudSnapshots={};
-    return true;
-  }
-
   // Override the app's old localStorage-backed helpers.
   window.getPengaturan=function(){return {...onlineSettings};};
   window.isPengaturanTerisi=function(){
@@ -5139,7 +5292,6 @@
     // Step 1: load the user's cloud data. Keep this error separate from UI/render errors.
     try{
       await loadRemoteData();
-      await ensureFreshStoreOnce();
     }catch(err){
       console.error('Cloud data load failed:',err);
       onlineReady=false;
