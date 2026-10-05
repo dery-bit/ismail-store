@@ -1020,6 +1020,7 @@
       <div class="flex gap-2 border-b border-gray-800 pb-2">
         <button id="filter-all" onclick="setFilter('Semua')" class="px-3 py-1 text-xs rounded-lg bg-gray-800 text-white font-medium border border-gray-700 cursor-pointer">Semua (0)</button>
         <button id="filter-tersedia" onclick="setFilter('Tersedia')" class="px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer">Tersedia (0)</button>
+        <button id="filter-kosong" onclick="setFilter('Kosong')" class="px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer">Kosong (0)</button>
         <button id="filter-terjual" onclick="setFilter('Terjual')" class="px-3 py-1 text-xs rounded-lg text-gray-400 hover:text-white cursor-pointer">Terjual (0)</button>
       </div>
 
@@ -2312,7 +2313,7 @@
 
     function setFilter(filter) {
       currentFilter = filter;
-      ['Semua', 'Tersedia', 'Terjual'].forEach(f => {
+      ['Semua', 'Tersedia', 'Kosong', 'Terjual'].forEach(f => {
         const btn = document.getElementById(`filter-${f.toLowerCase()}`);
         if(f === filter) {
           btn.className = "px-3 py-1 text-xs rounded-lg bg-gray-800 text-white font-medium border border-gray-700 cursor-pointer";
@@ -2607,6 +2608,7 @@
       normalizeStockStatuses();
       if (currentFilter === 'Terjual') return getStockSoldRows();
       if (currentFilter === 'Tersedia') return stockData.filter(i => (Number(i.jumlah) || 0) > 0);
+      if (currentFilter === 'Kosong') return stockData.filter(i => (Number(i.jumlah) || 0) <= 0);
       return stockData;
     }
 
@@ -2635,6 +2637,7 @@
       document.getElementById('header-stock-status').innerText = `${totalTersedia} tersedia, ${totalTerjual} terjual`;
       document.getElementById('filter-all').innerText = `Semua (${stockData.length})`;
       document.getElementById('filter-tersedia').innerText = `Tersedia (${tersediaData.length})`;
+      document.getElementById('filter-kosong').innerText = `Kosong (${stockData.filter(i => (Number(i.jumlah) || 0) <= 0).length})`;
       document.getElementById('filter-terjual').innerText = `Terjual (${terjualData.length})`;
 
       const warningText = document.getElementById('warning-text');
@@ -2658,7 +2661,9 @@
 
       const sourceRows = getStockRowsForCurrentFilter();
       const filtered = sourceRows.filter(item => {
-        const matchesFilter = currentFilter === 'Semua' || item.status === currentFilter;
+        // sourceRows sudah disaring oleh tab. Jangan menyaring lagi berdasarkan status stok lama,
+        // karena Terjual dihitung dari transaksi dan Kosong dari jumlah stok.
+        const matchesFilter = true;
         const barcodeVal = item.barcode || item.serial || '';
         const matchesSearch = item.produk.toLowerCase().includes(search) || 
                               item.kode.toLowerCase().includes(search) ||
@@ -2681,9 +2686,11 @@
         tr.className = "hover:bg-gray-800/30";
         tr.id = `row-${item.id}`;
         
-        const statusBadge = item.status === 'Tersedia' 
-          ? `<span class="bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 px-2 py-0.5 rounded text-[10px]">Tersedia</span>`
-          : `<span class="bg-blue-500/20 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded text-[10px]">Terjual</span>`;
+        const statusBadge = item.__soldView
+          ? `<span class="bg-blue-500/20 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded text-[10px]">Terjual</span>`
+          : ((Number(item.jumlah)||0) > 0
+            ? `<span class="bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 px-2 py-0.5 rounded text-[10px]">Tersedia</span>`
+            : `<span class="bg-red-500/20 text-red-400 border border-red-500/30 px-2 py-0.5 rounded text-[10px]">Kosong</span>`);
 
         const spesifikasi = [item.ram, item.memory, item.warna].filter(Boolean).join(' • ') || '-';
         const displayBarcode = item.barcode || item.serial || '-';
