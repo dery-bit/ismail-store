@@ -1116,9 +1116,11 @@
         <button onclick="closeModal('modal-detail')" class="text-gray-400 hover:text-white cursor-pointer">✕</button>
       </div>
       <div id="detail-content" class="space-y-2 text-gray-300 text-xs"></div>
-      <div class="flex justify-end gap-2 pt-2">
-        <button id="btn-print-detail" class="bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 border border-yellow-500/30 px-4 py-1.5 rounded-lg font-medium cursor-pointer">🖨️ Cetak</button>
-        <button onclick="closeModal('modal-detail')" class="bg-gray-800 hover:bg-gray-700 px-4 py-1.5 rounded-lg text-white cursor-pointer">Tutup</button>
+      <div class="flex justify-end gap-2 pt-2 flex-wrap">
+        <button id="btn-download-detail-png" type="button" class="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 px-4 py-1.5 rounded-lg font-medium cursor-pointer">🖼️ Download PNG</button>
+        <button id="btn-wa-detail" type="button" class="bg-green-500/20 hover:bg-green-500/30 text-green-400 border border-green-500/30 px-4 py-1.5 rounded-lg font-medium cursor-pointer">📲 Kirim ke WA</button>
+        <button id="btn-print-detail" type="button" class="bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 border border-yellow-500/30 px-4 py-1.5 rounded-lg font-medium cursor-pointer">🖨️ Cetak</button>
+        <button onclick="closeModal('modal-detail')" type="button" class="bg-gray-800 hover:bg-gray-700 px-4 py-1.5 rounded-lg text-white cursor-pointer">Tutup</button>
       </div>
     </div>
   </div>
@@ -2801,7 +2803,149 @@
         printDetailItem(item);
       };
 
+      const btnDownloadDetailPng = document.getElementById('btn-download-detail-png');
+      btnDownloadDetailPng.onclick = function() {
+        downloadDetailItemPNG(item);
+      };
+
+      const btnWaDetail = document.getElementById('btn-wa-detail');
+      btnWaDetail.onclick = function() {
+        sendDetailItemToWhatsApp(item);
+      };
+
       document.getElementById('modal-detail').classList.remove('hidden');
+    }
+
+    function detailItemPNGText(item) {
+      const displayBarcode = item.barcode || item.serial || '-';
+      const hargaJualFormatted = typeof item.hargaJual === 'number' ? formatRupiah(item.hargaJual) : (item.hargaJual || '-');
+      return [
+        ['Kode Barang', item.kode || '-'],
+        ['Nama Produk', item.produk || '-'],
+        ['RAM', item.ram || '-'],
+        ['Penyimpanan', item.memory || '-'],
+        ['Warna', item.warna || '-'],
+        ['Varian / Kategori', item.varian || '-'],
+        ['Jumlah Stok', `${item.jumlah ?? 0} unit`],
+        ['Barcode / IMEI', displayBarcode],
+        ['Pedagang', item.pedagang || '-'],
+        ['Tanggal Beli', item.tglTeks || item.tgl || '-'],
+        ['Harga Beli', formatRupiah(item.hargaBeli || 0)],
+        ['Harga Jual', hargaJualFormatted],
+        ['Status', item.status || ((Number(item.jumlah)||0) > 0 ? 'Tersedia' : 'Kosong')]
+      ];
+    }
+
+    function createDetailItemPNGBlob(item) {
+      return new Promise((resolve, reject) => {
+        try {
+          const rows = detailItemPNGText(item);
+          const canvas = document.createElement('canvas');
+          const width = 1000;
+          const rowH = 46;
+          const headerH = 145;
+          const footerH = 65;
+          canvas.width = width;
+          canvas.height = headerH + rows.length * rowH + footerH;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          ctx.fillStyle = '#111827';
+          ctx.fillRect(0, 0, width, headerH);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 30px Arial, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('ISMAIL SHOP', width / 2, 48);
+          ctx.font = 'bold 20px Arial, sans-serif';
+          ctx.fillText('DETAIL INFORMASI ITEM STOK', width / 2, 82);
+          ctx.font = '14px Arial, sans-serif';
+          ctx.fillStyle = '#d1d5db';
+          ctx.fillText(new Date().toLocaleString('id-ID'), width / 2, 112);
+
+          ctx.textAlign = 'left';
+          rows.forEach((row, index) => {
+            const y = headerH + index * rowH;
+            ctx.fillStyle = index % 2 === 0 ? '#f9fafb' : '#ffffff';
+            ctx.fillRect(0, y, width, rowH);
+            ctx.strokeStyle = '#e5e7eb';
+            ctx.beginPath();
+            ctx.moveTo(40, y + rowH);
+            ctx.lineTo(width - 40, y + rowH);
+            ctx.stroke();
+            ctx.fillStyle = '#4b5563';
+            ctx.font = 'bold 17px Arial, sans-serif';
+            ctx.fillText(row[0], 50, y + 29);
+            ctx.fillStyle = '#111827';
+            ctx.font = '17px Arial, sans-serif';
+            const value = String(row[1]);
+            const maxWidth = width - 390;
+            let shown = value;
+            while (ctx.measureText(shown).width > maxWidth && shown.length > 3) shown = shown.slice(0, -4) + '...';
+            ctx.fillText(shown, 385, y + 29);
+          });
+
+          const fy = headerH + rows.length * rowH;
+          ctx.fillStyle = '#f3f4f6';
+          ctx.fillRect(0, fy, width, footerH);
+          ctx.fillStyle = '#6b7280';
+          ctx.font = '13px Arial, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('Dicetak / dibuat dari Sistem Ismail Shop', width / 2, fy + 38);
+
+          canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Gagal membuat PNG.')), 'image/png');
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }
+
+    async function downloadDetailItemPNG(item) {
+      try {
+        const blob = await createDetailItemPNGBlob(item);
+        const safeName = String(item.produk || 'item-stok').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'item-stok';
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `detail-stok-${safeName}-${item.kode || item.id || 'item'}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      } catch (err) {
+        console.error(err);
+        alert('Gagal membuat PNG detail stok.');
+      }
+    }
+
+    async function sendDetailItemToWhatsApp(item) {
+      const text = `DETAIL ITEM STOK\n\nProduk: ${item.produk || '-'}\nKode: ${item.kode || '-'}\nRAM: ${item.ram || '-'}\nPenyimpanan: ${item.memory || '-'}\nWarna: ${item.warna || '-'}\nJumlah: ${item.jumlah ?? 0} unit\nBarcode/IMEI: ${item.barcode || item.serial || '-'}\nHarga Jual: ${typeof item.hargaJual === 'number' ? formatRupiah(item.hargaJual) : (item.hargaJual || '-')}\nStatus: ${item.status || '-'}\n\nIsmail Shop`;
+      try {
+        const blob = await createDetailItemPNGBlob(item);
+        const safeName = String(item.produk || 'item-stok').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'item-stok';
+        const file = new File([blob], `detail-stok-${safeName}.png`, { type: 'image/png' });
+
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], text });
+          return;
+        }
+
+        // Browser desktop biasanya tidak mengizinkan website melampirkan file otomatis ke WhatsApp Web.
+        // Jadi PNG tetap diunduh dan WhatsApp dibuka dengan keterangan yang siap dikirim.
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+
+        const waUrl = `https://wa.me/?text=${encodeURIComponent(text + '\n\nPNG detail stok sudah diunduh. Silakan lampirkan file PNG tersebut di WhatsApp.')}`;
+        window.open(waUrl, '_blank');
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+        console.error(err);
+        alert('Gagal menyiapkan kiriman WhatsApp. PNG bisa dicoba lewat tombol Download PNG.');
+      }
     }
 
     function printDetailItem(item) {
