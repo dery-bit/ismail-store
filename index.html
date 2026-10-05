@@ -3874,48 +3874,127 @@
     function cetakStrukPenjualan(saleId) {
       const s = salesData.find(x => x.id === saleId);
       if(!s) return;
-      const totalBersih = (s.hargaJual - (s.potongan || 0)) * (s.qty || 1);
-      
-      const printWindow = window.open('', '', 'width=400,height=600');
+
+      const qty = Number(s.qty) || 1;
+      const hargaJual = Number(s.hargaJual) || 0;
+      const potongan = Number(s.potongan) || 0;
+      const subtotal = hargaJual * qty;
+      const totalBersih = Math.max(0, subtotal - potongan);
+
+      // Cetak menggunakan layout yang fleksibel agar mengikuti ukuran kertas
+      // yang dipilih pada driver printer thermal (umum: 58mm, 80mm, 110mm).
+      // Tidak memakai lebar tetap sehingga tidak memotong isi pada printer berbeda.
+      const esc = (v) => String(v ?? '')
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;')
+        .replace(/'/g,'&#39;');
+
+      const printWindow = window.open('', '_blank', 'width=420,height=700');
+      if(!printWindow){
+        alert('Popup diblokir browser. Izinkan popup untuk mencetak struk.');
+        return;
+      }
+
+      const namaToko = (document.getElementById('set-nama-usaha')?.value || 'ISMAIL SHOP').trim();
+      const alamatToko = (document.getElementById('set-alamat')?.value || '').trim();
+      const noWa = (document.getElementById('set-no-wa')?.value || '').trim();
+      const admin = (s.kasir || document.getElementById('set-admin')?.value || '-').trim();
+      const footer = (document.getElementById('set-footer-struk')?.value || 'Terima Kasih Atas Kunjungan Anda!').trim();
+
+      printWindow.document.open();
       printWindow.document.write(`
-        <html>
+        <!doctype html>
+        <html lang="id">
         <head>
-          <title>Struk Belanja - Ismail Shop</title>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Struk - ${esc(namaToko)}</title>
           <style>
-            body { font-family: monospace; font-size: 11px; padding: 15px; color: #000; }
+            /* Kompatibel dengan printer thermal yang terpasang di Windows/Chrome.
+               Ukuran kertas ditentukan dari driver printer; isi memakai 100% lebar kertas. */
+            @page { size: auto; margin: 0; }
+            * { box-sizing: border-box; }
+            html, body { margin: 0; padding: 0; background: #fff; color: #000; }
+            body {
+              width: 100%;
+              max-width: 100%;
+              font-family: "Courier New", Courier, monospace;
+              font-size: 11px;
+              line-height: 1.35;
+              padding: 3mm;
+              overflow-wrap: anywhere;
+              word-break: break-word;
+            }
+            .receipt { width: 100%; max-width: 100%; margin: 0 auto; }
             .center { text-align: center; }
-            .line { border-bottom: 1px dashed #000; margin: 8px 0; }
-            .flex { display: flex; justify-content: space-between; }
+            .line { border-top: 1px dashed #000; height: 0; margin: 7px 0; }
+            .row { display: flex; width: 100%; gap: 8px; align-items: flex-start; }
+            .row .left { flex: 1 1 auto; min-width: 0; }
+            .row .right { flex: 0 0 auto; text-align: right; white-space: nowrap; }
+            .product { font-weight: 700; margin-bottom: 2px; }
+            .total { font-size: 12px; font-weight: 700; }
+            .small { font-size: 9px; }
+            .store-name { font-size: 14px; font-weight: 700; }
+            .muted { font-size: 10px; }
+            @media print {
+              html, body { width: 100%; min-width: 0; max-width: none; }
+              body { padding: 3mm; }
+              .receipt { width: 100%; }
+            }
           </style>
         </head>
         <body>
-          <div class="center">
-            <strong>ISMAIL SHOP</strong><br/>
-            <span>Pusat HP & Aksesoris</span>
+          <div class="receipt">
+            <div class="center">
+              <div class="store-name">${esc(namaToko)}</div>
+              ${alamatToko ? `<div class="muted">${esc(alamatToko)}</div>` : ''}
+              ${noWa ? `<div class="muted">${esc(noWa)}</div>` : ''}
+            </div>
+
+            <div class="line"></div>
+            <div>Pelanggan : ${esc(s.pelanggan || 'Umum')}</div>
+            <div>Tanggal   : ${esc(s.tanggal || '-')}</div>
+            <div>Kasir     : ${esc(admin)}</div>
+            <div class="line"></div>
+
+            <div class="product">${esc(s.produk || 'Produk')}</div>
+            ${s.spek ? `<div class="small">${esc(s.spek)}</div>` : ''}
+            <div class="row">
+              <div class="left">${qty} x ${esc(formatRupiah(hargaJual))}</div>
+              <div class="right">${esc(formatRupiah(subtotal))}</div>
+            </div>
+            ${potongan ? `<div class="row"><div class="left">Potongan</div><div class="right">- ${esc(formatRupiah(potongan))}</div></div>` : ''}
+
+            <div class="line"></div>
+            <div class="row total">
+              <div class="left">TOTAL</div>
+              <div class="right">${esc(formatRupiah(totalBersih))}</div>
+            </div>
+            <div class="row">
+              <div class="left">Bayar (${esc(normalizeMetodePembayaran(s.metode))})</div>
+              <div class="right">${esc(formatRupiah(totalBersih))}</div>
+            </div>
+            <div class="line"></div>
+
+            <div class="center small">
+              ${esc(footer).replace(/\n/g, '<br>')}<br>
+              <span>Barang yang dibeli dapat diretur sesuai ketentuan.</span>
+            </div>
           </div>
-          <div class="line"></div>
-          <div>Pelanggan : ${s.pelanggan || 'Umum'}</div>
-          <div>Tanggal   : ${s.tanggal}</div>
-          <div>Kasir     : ${s.kasir}</div>
-          <div class="line"></div>
-          <div><strong>${s.produk}</strong> (${s.spek})</div>
-          <div class="flex"><span>${s.qty || 1}x @ ${formatRupiah(s.hargaJual)}</span><span>${formatRupiah(s.hargaJual * (s.qty || 1))}</span></div>
-          ${s.potongan ? `<div class="flex"><span>Potongan</span><span>- ${formatRupiah(s.potongan)}</span></div>` : ''}
-          <div class="line"></div>
-          <div class="flex"><strong>Total Tagihan</strong><strong>${formatRupiah(totalBersih)}</strong></div>
-          <div class="flex"><span>Bayar (${normalizeMetodePembayaran(s.metode)})</span><span>${formatRupiah(totalBersih)}</span></div>
-          <div class="line"></div>
-          <div class="center">
-            <span>Terima Kasih Atas Kunjungan Anda!</span><br/>
-            <span>Barang yang dibeli dapat diretur sesuai ketentuan.</span>
-          </div>
+          <script>
+            window.addEventListener('load', function(){
+              setTimeout(function(){ window.focus(); window.print(); }, 150);
+            });
+            window.addEventListener('afterprint', function(){
+              setTimeout(function(){ window.close(); }, 250);
+            });
+          <\/script>
         </body>
         </html>
       `);
       printWindow.document.close();
-      printWindow.focus();
-      printWindow.print();
-      printWindow.close();
     }
 
     // ================= INVOICE PNG (TAMBAHAN) =================
